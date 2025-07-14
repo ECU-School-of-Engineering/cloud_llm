@@ -1,13 +1,19 @@
-FROM python:3.10-slim
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 # Install OS dependencies
 RUN apt-get update && apt-get install -y \
-    git cmake build-essential curl && \
-    rm -rf /var/lib/apt/lists/*
+    python3 python3-pip git curl \
+    build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+#python alias
+RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Python deps
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
+
+#Hugging Face
 
 # Copy app
 COPY app.py /app/app.py
@@ -15,6 +21,7 @@ WORKDIR /app
 
 # Create model directory
 RUN mkdir -p /app/models
+COPY models /app/models
 
 # Expose API port
 EXPOSE 8000

@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Install Docker
 sudo apt update
 sudo apt install -y docker.io
@@ -17,3 +19,14 @@ sudo apt update
 sudo apt install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
+
+
+#Git
+echo "🔐 Git..."
+sudo apt install -y git
+git clone https://github.com/ECU-School-of-Engineering/cloud_llm.git
+
+# Docker Compose: build and run
+echo "🐳 Init Docker Compose..."
+cd cloud_llm
+docker compose up --build -d
