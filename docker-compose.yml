@@ -1,0 +1,13 @@
+version: '3.9'
+
+services:
+  llama-api:
+    build: .
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    runtime: nvidia
