@@ -29,7 +29,7 @@ ENV HF_TOKEN=${HF_TOKEN}
 
 # Authenticate and download the model
 RUN echo "🔐 Logging into Hugging Face..." && \
-    echo "${HF_TOKEN}" | huggingface-cli login --token && \
+    huggingface-cli login --token ${HF_TOKEN} && \
     huggingface-cli download bartowski/L3-8B-Stheno-v3.2-GGUF \
       --include "L3-8B-Stheno-v3.2-Q4_K_M.gguf" \
       --local-dir /app/models/stheno

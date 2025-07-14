@@ -2,7 +2,10 @@ version: '3.9'
 
 services:
   host_clm:
-    build: .
+    build:
+      context: .
+      args:
+        HF_TOKEN: ${HF_TOKEN}
     ports:
       - "8000:8000"
     deploy:
@@ -14,3 +17,5 @@ services:
     command: bash           
     stdin_open: true        
     tty: true               
+    env_file:
+      - .env                
