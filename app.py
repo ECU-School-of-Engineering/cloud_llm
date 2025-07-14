@@ -12,7 +12,7 @@ from typing import AsyncIterable, Optional
 import re
 
 # 🧠 Load the model
-model_path = ".models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf"
+model_path = "models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf"
 llm = Llama(
     model_path=model_path,
     n_gpu_layers=-1,

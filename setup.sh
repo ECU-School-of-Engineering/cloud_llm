@@ -29,4 +29,4 @@ git clone https://github.com/ECU-School-of-Engineering/cloud_llm.git
 # Docker Compose: build and run
 echo "🐳 Init Docker Compose..."
 cd cloud_llm
-docker compose up --build -d
+docker compose --compatibility up --build -d
