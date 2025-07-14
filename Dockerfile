@@ -30,9 +30,13 @@ ENV HF_TOKEN=${HF_TOKEN}
 # Authenticate and download the model
 RUN echo "🔐 Logging into Hugging Face..." && \
     huggingface-cli login --token ${HF_TOKEN} && \
-    huggingface-cli download bartowski/L3-8B-Stheno-v3.2-GGUF \
-      --include "L3-8B-Stheno-v3.2-Q4_K_M.gguf" \
-      --local-dir /app/models/stheno
+    if [ ! -f /app/models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf ]; then \
+      huggingface-cli download bartowski/L3-8B-Stheno-v3.2-GGUF \
+        --include "L3-8B-Stheno-v3.2-Q4_K_M.gguf" \
+        --local-dir /app/models/stheno; \
+    else \
+      echo "✅ Model already exists, skipping download."; \
+    fi
 
 WORKDIR /app
 
