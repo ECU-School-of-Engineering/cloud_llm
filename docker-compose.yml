@@ -11,3 +11,6 @@ services:
           devices:
             - capabilities: [gpu]
     runtime: nvidia
+    command: bash           
+    stdin_open: true        
+    tty: true               
