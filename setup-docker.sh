@@ -21,6 +21,10 @@ sudo apt install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 
+# Docker compose
+sudo apt update
+sudo apt install docker-compose-plugin
+
 # Git
 echo "🔐 Git..."
 sudo apt install -y git
