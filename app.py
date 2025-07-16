@@ -21,7 +21,7 @@ llm = Llama(
     n_batch=512,
 )
 print("✅ Model loaded successfully.")
-
+print(llm)
 # Initialize FastAPI app
 app = FastAPI()
 
