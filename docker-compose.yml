@@ -14,7 +14,7 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-    command: bash                    # Inicia en modo interactivo
+    # command: bash                    # Inicia en modo interactivo
     stdin_open: true
     tty: true
     env_file:
