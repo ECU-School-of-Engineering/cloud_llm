@@ -9,6 +9,10 @@ RUN apt-get update && apt-get install -y \
 #python alias
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
+#Llama from source
+RUN CMAKE_ARGS="-DLLAMA_CUBLAS=on" pip install --upgrade pip && \
+    pip install llama-cpp-python --force-reinstall --no-cache-dir
+
 # Python deps
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
