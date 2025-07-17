@@ -3,5 +3,6 @@ models/*
 /app/models/.gitkeep
 models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf
 /venv
-*.pyc
+
 *.python*
+*.pyc
