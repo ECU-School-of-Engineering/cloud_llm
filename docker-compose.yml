@@ -5,17 +5,18 @@ services:
     build:
       context: .
       args:
-        HF_TOKEN: ${HF_TOKEN}        # Se pasará desde .env
+        HF_TOKEN: ${HF_TOKEN}
     ports:
       - "8000:8000"
-    runtime: nvidia
-    devices:
-      - /dev/nvidia0                 # Acceso directo al GPU (puedes usar "all")
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-    # command: bash                    # Inicia en modo interactivo
     stdin_open: true
     tty: true
     env_file:
-      - .env                         # Carga las variables (ej. HF_TOKEN)
+      - .env
