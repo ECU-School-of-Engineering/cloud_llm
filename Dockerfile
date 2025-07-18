@@ -3,15 +3,22 @@ FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 # Install OS dependencies
 RUN apt-get update && apt-get install -y \
     python3 python3-pip git curl \
-    build-essential cmake \
+    build-essential cmake ninja-build \
+    libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
+
 
 #python alias
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
 #Llama from source
-RUN CMAKE_ARGS="-DLLAMA_CUBLAS=on" pip install --upgrade pip && \
-    pip install llama-cpp-python --force-reinstall --no-cache-dir
+# ENV CMAKE_ARGS="-DGGML_CUDA=on"
+# RUN pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir
+# CUDA linker
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+RUN CMAKE_ARGS="-DGGML_CUDA=on" FORCE_CMAKE=1 pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir
+
 
 # Python deps
 COPY requirements.txt .
