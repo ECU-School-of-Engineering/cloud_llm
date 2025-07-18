@@ -15,9 +15,17 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 # ENV CMAKE_ARGS="-DGGML_CUDA=on"
 # RUN pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir
 # CUDA linker
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
-RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
-RUN CMAKE_ARGS="-DGGML_CUDA=on" FORCE_CMAKE=1 pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir
+# ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+# RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+# RUN CMAKE_ARGS="-DGGML_CUDA=on" FORCE_CMAKE=1 pip install llama-cpp-python --no-binary llama-cpp-python --force-reinstall --no-cache-dir
+
+#Llama from source - from colab
+RUN pip install scikit-build-core==0.9.0
+ENV CMAKE_ARGS="-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=75"
+ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs
+ENV FORCE_CMAKE=1
+RUN pip install llama-cpp-python==0.2.62 --no-binary llama-cpp-python \
+    --force-reinstall --upgrade --no-cache-dir --verbose --no-build-isolation
 
 
 # Python deps
@@ -54,4 +62,6 @@ WORKDIR /app
 # Expose API port
 EXPOSE 8000
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/bin/bash", "-c", "uvicorn app:app --host 0.0.0.0 --port 8000"]
+
