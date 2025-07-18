@@ -42,12 +42,15 @@ RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall -
 COPY app.py /app/app.py
 WORKDIR /app
 
-
 # # Create model directory
 # RUN mkdir -p /app/models
 # COPY models /app/models
 
 #Hugging Face
+# RUN mkdir -p /app/models/stheno
+# # Set build arg
+# ARG HF_TOKEN
+# ENV HF_TOKEN=${HF_TOKEN}
 # RUN mkdir -p /app/models/stheno
 # # Set build arg
 # ARG HF_TOKEN
@@ -63,7 +66,6 @@ WORKDIR /app
 #     else \
 #       echo "✅ Model already exists, skipping download."; \
 #     fi
-
 
 WORKDIR /app
 
