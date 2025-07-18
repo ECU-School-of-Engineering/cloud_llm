@@ -36,26 +36,26 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY app.py /app/app.py
 WORKDIR /app
 
-# Create model directory
-RUN mkdir -p /app/models
-COPY models /app/models
+# # Create model directory
+# RUN mkdir -p /app/models
+# COPY models /app/models
 
 #Hugging Face
-RUN mkdir -p /app/models/stheno
-# Set build arg
-ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
+# RUN mkdir -p /app/models/stheno
+# # Set build arg
+# ARG HF_TOKEN
+# ENV HF_TOKEN=${HF_TOKEN}
 
-# Authenticate and download the model
-RUN echo "🔐 Logging into Hugging Face..." && \
-    huggingface-cli login --token ${HF_TOKEN} && \
-    if [ ! -f /app/models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf ]; then \
-      huggingface-cli download bartowski/L3-8B-Stheno-v3.2-GGUF \
-        --include "L3-8B-Stheno-v3.2-Q4_K_M.gguf" \
-        --local-dir /app/models/stheno; \
-    else \
-      echo "✅ Model already exists, skipping download."; \
-    fi
+# # Authenticate and download the model
+# RUN echo "🔐 Logging into Hugging Face..." && \
+#     huggingface-cli login --token ${HF_TOKEN} && \
+#     if [ ! -f /app/models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf ]; then \
+#       huggingface-cli download bartowski/L3-8B-Stheno-v3.2-GGUF \
+#         --include "L3-8B-Stheno-v3.2-Q4_K_M.gguf" \
+#         --local-dir /app/models/stheno; \
+#     else \
+#       echo "✅ Model already exists, skipping download."; \
+#     fi
 
 WORKDIR /app
 
