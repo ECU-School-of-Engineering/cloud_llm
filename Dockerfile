@@ -1,11 +1,12 @@
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
-# Install OS dependencies
+# Install OS-level dependencies
 RUN apt-get update && apt-get install -y \
     python3 python3-pip git curl \
     build-essential cmake ninja-build \
     libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
+
 
 
 #python alias
@@ -29,12 +30,17 @@ RUN pip install llama-cpp-python==0.2.62 --no-binary llama-cpp-python \
 
 
 # Python deps
+
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
+Casa
+# Build and install llama-cpp-python from source with CUDA (cuBLAS) support
+RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
 
-# Copy app
+# Copy FastAPI app
 COPY app.py /app/app.py
 WORKDIR /app
+
 
 # # Create model directory
 # RUN mkdir -p /app/models
@@ -57,10 +63,12 @@ WORKDIR /app
 #       echo "✅ Model already exists, skipping download."; \
 #     fi
 
+
 WORKDIR /app
 
-# Expose API port
+# Expose FastAPI port
 EXPOSE 8000
+
 
 # CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
 CMD ["/bin/bash", "-c", "uvicorn app:app --host 0.0.0.0 --port 8000"]
