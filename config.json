@@ -1,0 +1,9 @@
+{
+  "backend": "cpu",          // "cpu" | "gpu"
+  "batch_size": 32,          // int >= 1
+  "log_level": "INFO",       // "DEBUG" | "INFO" | "WARN" | "ERROR"
+  "features": {
+    "use_cache": true,
+    "enable_metrics": false
+  }
+}
