@@ -7,10 +7,10 @@ import json
 # }
 
 with open("config.json", "r", encoding="utf-8") as f:
-    config = json.load(f)
+    print(f.read())
+    config = json.load(f.read())
 
-print(config)
-# -> {'use_cpu': True, 'use_gpu': False}
+# print(config)
+# # -> {'use_cpu': True, 'use_gpu': False}
 
-print(config["use_cpu"])  # True
-print(config["use_gpu"])  # False
+# print(config["backend"])  # True
