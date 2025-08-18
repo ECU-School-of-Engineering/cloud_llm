@@ -85,7 +85,7 @@ async def get_response(messages: list[dict], custom_session_id: Optional[str] = 
             "id": base_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": "dolphin-2.8-mistral-7b-v02.GGUF",
+            "model": model_path,
             "choices": [
                 {
                     "delta": {"content": word + " "},
@@ -101,7 +101,7 @@ async def get_response(messages: list[dict], custom_session_id: Optional[str] = 
         "id": base_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": "dolphin-2.8-mistral-7b-v02.GGUF",
+        "model": model_path,
         "choices": [
             {
                 "delta": {},

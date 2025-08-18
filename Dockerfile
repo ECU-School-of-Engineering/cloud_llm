@@ -1,10 +1,8 @@
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
-# Install OS-level dependencies
+# Install OS dependencies
 RUN apt-get update && apt-get install -y \
     python3 python3-pip git curl \
-    build-essential cmake ninja-build \
-    libopenblas-dev \
     build-essential cmake ninja-build \
     libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -31,14 +29,10 @@ RUN pip install llama-cpp-python==0.2.62 --no-binary llama-cpp-python \
 
 
 # Python deps
-
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
-Casa
-# Build and install llama-cpp-python from source with CUDA (cuBLAS) support
-RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
 
-# Copy FastAPI app
+# Copy app
 COPY app.py /app/app.py
 WORKDIR /app
 
@@ -47,10 +41,6 @@ WORKDIR /app
 # COPY models /app/models
 
 #Hugging Face
-# RUN mkdir -p /app/models/stheno
-# # Set build arg
-# ARG HF_TOKEN
-# ENV HF_TOKEN=${HF_TOKEN}
 # RUN mkdir -p /app/models/stheno
 # # Set build arg
 # ARG HF_TOKEN
@@ -69,9 +59,8 @@ WORKDIR /app
 
 WORKDIR /app
 
-# Expose FastAPI port
-EXPOSE 8000
+# Expose API port
+EXPOSE 80
 
 # CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
-CMD ["/bin/bash", "-c", "uvicorn app:app --host 0.0.0.0 --port 8000"]
-
+CMD ["/bin/bash", "-c", "uvicorn app:app --host 0.0.0.0 --port 80"]
