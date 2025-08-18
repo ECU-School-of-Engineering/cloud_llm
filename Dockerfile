@@ -34,7 +34,7 @@ RUN pip install llama-cpp-python==0.2.62 --no-binary llama-cpp-python \
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
-Casa
+
 # Build and install llama-cpp-python from source with CUDA (cuBLAS) support
 RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --force-reinstall --no-cache-dir
 
