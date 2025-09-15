@@ -6,11 +6,120 @@ import asyncio
 import json
 import uuid
 import time
-from typing import AsyncIterable, Optional, List, Dict
-import re
+from typing import AsyncIterable, List, Dict
 import threading
+import sqlite3
+import uuid
+# =========================================================
+# Conversation Manager: handles history persistence
+# =========================================================
 
-# 🧠 Load the model (same as yours)
+# =========================================================
+# Global session management
+# =========================================================
+DEFAULT_SESSION_ID = str(uuid.uuid4())  # created once at startup
+print(f"✨ Default session initialized: {DEFAULT_SESSION_ID}")
+
+
+class ConversationManager:
+    def __init__(self, db_path="conversations.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        """Create table if it doesn't exist"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            session_id TEXT,
+            turn_number INTEGER,
+            role TEXT,
+            content TEXT,
+            PRIMARY KEY (session_id, turn_number)
+        )
+        """)
+        conn.commit()
+        conn.close()
+
+
+    def add_message(self, session_id: str, role: str, content: str):
+        """Insert a single message with next incremental turn_number"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Get last turn_number for this session
+        cursor.execute(
+            "SELECT COALESCE(MAX(turn_number), 0) FROM conversations WHERE session_id = ?",
+            (session_id,)
+        )
+        last_turn = cursor.fetchone()[0]
+        next_turn = last_turn + 1
+
+        # Insert new message
+        cursor.execute(
+            "INSERT INTO conversations (session_id, turn_number, role, content) VALUES (?, ?, ?, ?)",
+            (session_id, next_turn, role, content)
+        )
+
+        conn.commit()
+        conn.close()
+
+
+
+    def get_history(self, session_id: str) -> List[Dict]:
+        """Fetch all messages for a given session"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT turn_number, role, content FROM conversations WHERE session_id = ? ORDER BY turn_number ASC", (session_id,))
+        rows = c.fetchall()
+        conn.close()
+        return [{"turn_number": t, "role": r, "content": c} for t, r, c in rows]
+
+    def clear_history(self, session_id: str):
+        """Delete all messages for a given session"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
+        conn.commit()
+        conn.close()
+
+    def get_history(self, session_id: str) -> List[Dict]:
+        """Fetch messages ordered by turn_number"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT role, content FROM conversations WHERE session_id = ? ORDER BY turn_number ASC",
+            (session_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"role": role, "content": content} for role, content in rows]
+
+
+# =========================================================
+# Prompt Manager: builds the final prompt for the model
+# =========================================================
+class PromptManager:
+    def __init__(self, base_context: str, character_behavior: str):
+        self.base_context = base_context.strip()
+        self.character_behavior = character_behavior.strip()
+
+    def build_prompt(self, history: List[Dict]) -> str:
+        """Combine context, character, and conversation history into a prompt"""
+        prompt = f"{self.base_context}\n\n{self.character_behavior}\n\n"
+        for msg in history:
+            if msg["role"] == "user":
+                prompt += f"Nurse: {msg['content']}\n"
+            elif msg["role"] == "assistant":
+                prompt += f"Patient: {msg['content']}\n"
+        prompt += "Patient: "
+        print(f"📝 Prompt sent to model:\n{prompt}\n")
+        return prompt
+
+# =========================================================
+# Model initialization
+# =========================================================
 model_path = "models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf"
 llm = Llama(
     model_path=model_path,
@@ -22,53 +131,49 @@ llm = Llama(
 print("✅ Model loaded successfully.")
 print(llm)
 
+# =========================================================
+# Managers
+# =========================================================
+conv_manager = ConversationManager()
+prompt_manager = PromptManager(
+    base_context="You are in a busy hospital in Melbourne, Australia.",
+    character_behavior="""
+- You're "Barry", a rough Australian man in his 40s.
+- You're annoyed because you've been waiting for hours.
+- You have a sharp pain in your left shoulder and want painkillers.
+- You're violent, blunt, rude, and impatient and use curse words.
+- Use casual Australian slang and expressions where appropriate.
+- Stay in character as if talking to a nurse.
+- Do not use symbols, keep it simple, conversational, and short.
+""",
+)
+
+# =========================================================
+# FastAPI app
+# =========================================================
 app = FastAPI()
 
-# --- Prompt formatting (your style) ---
-def build_prompt(messages: List[Dict]) -> str:
-    system_prompt = """
-You are playing the role of a patient in a busy hospital in Melbourne, Australia.
-
-Your character:
-- You're "Barry", the patient, a rough-around-the-edges Australian man in his 40s.
-- You’re annoyed because you've been waiting for hours.
-- You have a sharp pain in your left shoulder and want painkillers.
-- You’re violent, blunt, rude, and impatient and use curse words.
-- Use casual Australian slang and expressions where appropriate.
-- Don’t sound like a robot. Be natural, frustrated, and honest.
-- You refuse to leave until someone gives you something for the pain.
-
-Important:
-- Do not use symbols, just plain text
-- Keep it simple and conversational, no endless responses
-- Stay in character as if you're talking to a nurse.
-""".strip()
-
-    prompt = system_prompt + "\n\n"
-    for msg in messages:
-        if msg.get("role") == "user":
-            prompt += f"Nurse: {msg.get('content')}\n"
-        elif msg.get("role") == "assistant":
-            prompt += f"Patient: {msg.get('content')}\n"
-
-    prompt += "Patient: "
-    return prompt
-
-# --- SSE streaming bridge: llama.cpp (sync stream) -> async generator ---
-async def sse_stream_from_llama(messages: List[Dict], request: Request) -> AsyncIterable[str]:
+# =========================================================
+# SSE streaming bridge
+# =========================================================
+async def sse_stream_from_llama(session_id: str, request: Request) -> AsyncIterable[str]:
     base_id = f"chatcmpl_{uuid.uuid4().hex[:24]}"
     created = int(time.time())
 
-    # queue carries tiny text deltas from the producer thread to this async generator
     q: asyncio.Queue = asyncio.Queue()
     DONE = object()
 
-    prompt = build_prompt(messages)
+    # Get conversation history and build prompt
+    history = conv_manager.get_history(session_id)
+    print(f"\tHistory: {history}")
+    prompt = prompt_manager.build_prompt(history)
+
     loop = asyncio.get_running_loop()
+    full_text = []
 
     def producer():
+        """Run llama.cpp in a background thread and push chunks into a queue"""
         try:
-            # llama-cpp *blocking* stream of deltas (each has choices[0].text)
             for chunk in llm.create_completion(
                 prompt=prompt,
                 max_tokens=150,
@@ -83,30 +188,30 @@ async def sse_stream_from_llama(messages: List[Dict], request: Request) -> Async
         finally:
             asyncio.run_coroutine_threadsafe(q.put(DONE), loop)
 
-    # start producer in background so we don't block the event loop
     threading.Thread(target=producer, daemon=True).start()
 
-    # (Optional) send the role first, OpenAI-style
+    # Initial assistant role message (OpenAI-style)
     head = {
         "id": base_id,
         "object": "chat.completion.chunk",
+        "system_fingerprint": session_id,
         "created": created,
         "model": model_path,
         "choices": [{"delta": {"role": "assistant"}, "index": 0, "finish_reason": None}],
     }
     yield f"data: {json.dumps(head)}\n\n"
 
-    # forward each small text delta as an SSE "delta.content"
+    # Stream deltas to client
     while True:
         item = await q.get()
         if item is DONE:
             break
         if isinstance(item, Exception):
-            # you can also emit an error event here if you prefer
             break
         if await request.is_disconnected():
-            # client went away: stop generation
             break
+
+        full_text.append(item)
 
         chunk = {
             "id": base_id,
@@ -117,7 +222,13 @@ async def sse_stream_from_llama(messages: List[Dict], request: Request) -> Async
         }
         yield f"data: {json.dumps(chunk)}\n\n"
 
-    # final chunk + DONE
+    # Save assistant's full reply into history
+    assistant_reply = "".join(full_text)
+    if assistant_reply!="":
+        conv_manager.add_message(session_id, "assistant", assistant_reply)
+    print(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply[:50]}...")
+
+    # Final stop chunk
     final_chunk = {
         "id": base_id,
         "object": "chat.completion.chunk",
@@ -128,23 +239,57 @@ async def sse_stream_from_llama(messages: List[Dict], request: Request) -> Async
     yield f"data: {json.dumps(final_chunk)}\n\n"
     yield "data: [DONE]\n\n"
 
-# --- FastAPI endpoint (async, non-blocking) ---
+# =========================================================
+# Endpoints
+# =========================================================
 @app.post("/chat/completions", response_class=StreamingResponse)
 async def chat_completions(request: Request):
-    print("🚨 Incoming request to /chat/completions")
-    try:
-        body = await request.json()
-    except Exception:
-        return {"error": "Invalid JSON format"}
+    """Main endpoint: receive user messages, stream assistant reply"""
+    raw = await request.body()
+    print("📩 Raw:", raw.decode("utf-8"))
+    
+    body = json.loads(raw)
+    # session_id = body.get("session_id", "default")
+    session_id = body.get("session_id", DEFAULT_SESSION_ID)
+    if not session_id:
+        session_id = str(uuid.uuid4())  # auto-generate one
+        print(f"✨ Created new session: {session_id}")
+    
+    user_messages = body.get("messages", [])
 
-    messages = body.get("messages", [])
+    # Save user messages into history
+    for m in user_messages:
+        conv_manager.add_message(session_id, m["role"], m["content"])
+
     return StreamingResponse(
-        sse_stream_from_llama(messages, request),
+        sse_stream_from_llama(session_id, request),
         media_type="text/event-stream",
         headers={
-            # Helpful SSE headers
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
+            "X-Accel-Buffering": "no",
         },
     )
+
+@app.post("/chat/new_session")
+async def new_session():
+    """Endpoint to create a new session (conversation)"""
+    session_id = str(uuid.uuid4())  # generate unique session id
+    # Optionally: you could insert a "system" message here if you want
+    return {"status": "ok", "session_id": session_id}
+
+@app.get("/chat/history/{session_id}")
+async def get_chat_history(session_id: str):
+    """Return the full conversation history for a given session_id"""
+    history = conv_manager.get_history(session_id)
+    return {
+        "session_id": session_id,
+        "history": history
+    }
+
+@app.get("/escalation/{escalation}")
+async def get_escalation(escalation: str):
+    """Return the full conversation history for a given session_id"""
+    return {
+        "escalation": escalation
+    }
