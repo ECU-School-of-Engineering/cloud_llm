@@ -3,3 +3,4 @@ uvicorn
 nest_asyncio
 # llama-cpp-python==0.2.62
 huggingface_hub
+pyyaml

@@ -1,0 +1,73 @@
+defaults:
+  - recipe_id: barry_hospital
+    behaviour_level: 5
+    turns_per_step: 3
+
+roles:
+  - id: barry
+    name: Barry
+    base_context: |
+      You are in a busy hospital in Melbourne, Australia.
+    character_behavior: |
+      You're "Barry", a rough Australian man in his 40s.
+      You're annoyed because you've been waiting for hours.
+      You have a sharp pain in your left shoulder and want painkillers.
+      You're violent, blunt, rude, and impatient and use curse words.
+      Use casual Australian slang and expressions where appropriate.
+      Stay in character as if talking to a nurse.
+      Do not use symbols, keep it simple, conversational, and short.
+
+
+  - id: maddy
+    name: Maddy
+    base_context: |
+      You are in a noisy classroom.
+    character_behavior: |
+      You're Maddy, a strict math teacher.
+
+milestones:
+  - id: hospital_path
+    steps:
+      - order: 1
+        milestone: "Complains about the Time"
+      - order: 2
+        milestone: "Complains about the Pain"
+      - order: 3
+        milestone: "Barry threatens to leave."
+      - order: 4
+        milestone: "Worried about long term implications"
+
+  - id: school_path
+    steps:
+      - order: 1
+        milestone: "Complains homework."
+      - order: 2
+        milestone: "Complains noone listens to her"
+
+behaviours:
+  - id: Barry
+    levels:
+      - level: 1
+        description: "Distressed but receptive"
+      - level: 2
+        description: "Distressed, frustrated"
+      - level: 3
+        description: "Becomes violent and threatening."
+
+  - id: Maddy
+    levels:
+      - level: 1
+        description: "Gives short, firm instructions."
+      - level: 2
+        description: "Scolds students for mistakes."
+
+recipes:
+  - id: barry_hospital
+    role: barry
+    milestones: hospital_path
+    behaviours: Barry
+
+  - id: classroom_test
+    role: maddy
+    milestones: school_path
+    behaviours: Maddy

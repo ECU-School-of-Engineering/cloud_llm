@@ -1,7 +1,9 @@
 # app.py
+# start with: uvicorn app:app --host 0.0.0.0 --port 8080 --log-level debug
+
+
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
-from llama_cpp import Llama
 import asyncio
 import json
 import uuid
@@ -10,6 +12,136 @@ from typing import AsyncIterable, List, Dict
 import threading
 import sqlite3
 import uuid
+import logging
+import yaml
+from typing import List, Dict
+
+# Configure logging 
+logging.basicConfig(
+    level=logging.DEBUG,  # default log level
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
+## Content classes ###
+#----------------------------------------------#
+
+class Role:
+    def __init__(self, id: str, name: str, base_context: str, character_behavior: str):
+        self.id = id
+        self.name = name
+        self.base_context = base_context
+        self.character_behavior = character_behavior
+
+
+class BehaviourLevel:
+    def __init__(self, level: int, description: str):
+        self.level = level
+        self.description = description
+
+
+class BehaviourSet:
+    def __init__(self, id: str, levels: List[BehaviourLevel]):
+        self.id = id
+        self.levels = levels
+
+    def get_level(self, level: int) -> BehaviourLevel:
+        return next(l for l in self.levels if l.level == level)
+
+
+class Milestone:
+    def __init__(self, order: int, description: str):
+        self.order = order
+        self.description = description
+
+    def __str__(self):
+        return self.description
+
+
+class Recipe:
+    def __init__(self, id: str, role: Role, behaviours: BehaviourSet, milestones: List[Milestone]):
+        self.id = id
+        self.role = role
+        self.behaviours = behaviours
+        self.milestones = milestones
+
+## Confing Loader classes ###
+#----------------------------------------------#
+
+class ConfigLoader:
+    def __init__(self, yaml_path: str):
+        with open(yaml_path, "r") as f:
+            self.config = yaml.safe_load(f)
+
+        # Grab defaults section if it exists
+        self.defaults = self.config.get("defaults", {})
+
+    def get_default_recipe_id(self) -> str:
+        return self.defaults.get("recipe_id")
+
+    def get_default_behaviour_level(self) -> int:
+        return int(self.defaults.get("behaviour_level", 1))
+
+    def get_default_turns_per_step(self) -> int:
+        return int(self.defaults.get("turns_per_step", 3))
+
+    def get_recipe(self, recipe_id: str = None) -> Recipe:
+        # Fall back to default recipe if not provided
+        recipe_id = recipe_id or self.get_default_recipe_id()
+        recipe_data = next(r for r in self.config["recipes"] if r["id"] == recipe_id)
+
+        # Resolve role
+        role_data = next(r for r in self.config["roles"] if r["id"] == recipe_data["role"])
+        role = Role(
+            id=role_data["id"],
+            name=role_data["name"],
+            base_context=role_data["base_context"],
+            character_behavior=role_data["character_behavior"]
+        )
+
+        # Resolve behaviour set
+        behaviours_data = next(b for b in self.config["behaviours"] if b["id"] == recipe_data["behaviours"])
+        behaviour_levels = [BehaviourLevel(l["level"], l["description"]) for l in behaviours_data["levels"]]
+        behaviour_set = BehaviourSet(id=behaviours_data["id"], levels=behaviour_levels)
+
+        # Resolve milestones
+        milestones_data = next(m for m in self.config["milestones"] if m["id"] == recipe_data["milestones"])
+        milestones = [Milestone(s["order"], s["milestone"]) for s in milestones_data["steps"]]
+
+        return Recipe(
+            id=recipe_data["id"],
+            role=role,
+            behaviours=behaviour_set,
+            milestones=milestones
+        )
+
+
+
+##===========================
+# Milestone Tracker ####
+class MilestoneTracker:
+    def __init__(self, milestones: List[Milestone], turns_per_step: int = 3):
+        self.milestones = sorted(milestones, key=lambda m: m.order)
+        self.index = 0
+        self.turn_counter = 0
+        self.turns_per_step = turns_per_step
+
+    def current(self) -> Milestone:
+        return self.milestones[self.index]
+
+    def record_turn(self):
+        self.turn_counter += 1
+
+    def should_advance(self) -> bool:
+        return self.turn_counter >= self.turns_per_step and self.index < len(self.milestones) - 1
+
+    def advance(self):
+        if self.should_advance():
+            self.index += 1
+            self.turn_counter = 0
+
+
 # =========================================================
 # Conversation Manager: handles history persistence
 # =========================================================
@@ -18,13 +150,15 @@ import uuid
 # Global session management
 # =========================================================
 DEFAULT_SESSION_ID = str(uuid.uuid4())  # created once at startup
-print(f"✨ Default session initialized: {DEFAULT_SESSION_ID}")
+logger.info(f"✨ Default session initialized: {DEFAULT_SESSION_ID}")
+
 
 
 class ConversationManager:
     def __init__(self, db_path="conversations.db"):
         self.db_path = db_path
         self._init_db()
+        self.trackers = {}
 
     def _init_db(self):
         """Create table if it doesn't exist"""
@@ -42,13 +176,11 @@ class ConversationManager:
         conn.commit()
         conn.close()
 
-
     def add_message(self, session_id: str, role: str, content: str):
         """Insert a single message with next incremental turn_number"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Get last turn_number for this session
         cursor.execute(
             "SELECT COALESCE(MAX(turn_number), 0) FROM conversations WHERE session_id = ?",
             (session_id,)
@@ -56,31 +188,11 @@ class ConversationManager:
         last_turn = cursor.fetchone()[0]
         next_turn = last_turn + 1
 
-        # Insert new message
         cursor.execute(
             "INSERT INTO conversations (session_id, turn_number, role, content) VALUES (?, ?, ?, ?)",
             (session_id, next_turn, role, content)
         )
 
-        conn.commit()
-        conn.close()
-
-
-
-    def get_history(self, session_id: str) -> List[Dict]:
-        """Fetch all messages for a given session"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        c.execute("SELECT turn_number, role, content FROM conversations WHERE session_id = ? ORDER BY turn_number ASC", (session_id,))
-        rows = c.fetchall()
-        conn.close()
-        return [{"turn_number": t, "role": r, "content": c} for t, r, c in rows]
-
-    def clear_history(self, session_id: str):
-        """Delete all messages for a given session"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        c.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
         conn.commit()
         conn.close()
 
@@ -96,6 +208,16 @@ class ConversationManager:
         conn.close()
         return [{"role": role, "content": content} for role, content in rows]
 
+    def get_tracker(self, session_id: str) -> "MilestoneTracker":
+        return self.trackers.get(session_id)
+
+    def set_tracker(self, session_id: str, tracker: "MilestoneTracker"):
+        self.trackers[session_id] = tracker
+    
+    def get_or_create_tracker(self, session_id: str, recipe: "Recipe") -> "MilestoneTracker":
+        if session_id not in self.trackers:
+            self.trackers[session_id] = MilestoneTracker(recipe.milestones)
+        return self.trackers[session_id]
 
 # =========================================================
 # Prompt Manager: builds the final prompt for the model
@@ -114,22 +236,110 @@ class PromptManager:
             elif msg["role"] == "assistant":
                 prompt += f"Patient: {msg['content']}\n"
         prompt += "Patient: "
-        print(f"📝 Prompt sent to model:\n{prompt}\n")
+        logger.info(f"📝 Prompt sent to model:\n{prompt}\n")
         return prompt
+
+
+# =========================================================
+# LLM Backends
+# =========================================================
+from abc import ABC, abstractmethod
+
+
+class LLMBackend(ABC):
+    @abstractmethod
+    def stream(self, prompt: str, **kwargs):
+        """Yield text chunks as they are generated"""
+        pass
+
+
+# Backend 1: llama.cpp
+from llama_cpp import Llama
+
+
+class LlamaBackend(LLMBackend):
+    def __init__(self, model_path: str, **kwargs):
+        self.llm = Llama(model_path=model_path, **kwargs)
+
+    def stream(self, prompt: str, max_tokens=150, stop=None, **kwargs):
+        for chunk in self.llm.create_completion(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            stop=stop,
+            stream=True,
+        ):
+            text_delta = chunk["choices"][0].get("text", "")
+            if text_delta:
+                yield text_delta
+
+
+# Backend 2: HF Transformers + TextIteratorStreamer
+import torch
+from threading import Thread
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+
+
+class HFStreamerBackend(LLMBackend):
+    def __init__(self, model_name: str, device="cuda", **kwargs):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
+            device_map="auto" if device.startswith("cuda") else None,
+        )
+        self.device = device
+
+    def stream(self, prompt: str, max_tokens=150, stop=None, **kwargs):
+        model_inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True,
+        )
+
+        generation_args = {
+            "inputs": model_inputs.input_ids,
+            "max_new_tokens": max_tokens,
+            "streamer": streamer,
+            "do_sample": True,   # make it generate richer text
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }
+
+        thread = Thread(target=self.model.generate, kwargs=generation_args)
+        thread.start()
+
+        buffer = ""
+        for new_text in streamer:
+            logger.debug(f"🟢 HF streamer yielded: [{new_text}]")  # DEBUG
+            buffer += new_text
+            if stop and any(s in buffer for s in stop):
+                cut_idx = min(buffer.find(s) for s in stop if s in buffer)
+                yield buffer[:cut_idx]
+                return
+            yield new_text
+
+
 
 # =========================================================
 # Model initialization
 # =========================================================
-model_path = "models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf"
-llm = Llama(
-    model_path=model_path,
-    n_gpu_layers=-1,
-    n_ctx=4096,
-    n_threads=8,
-    n_batch=512,
-)
-print("✅ Model loaded successfully.")
-print(llm)
+# 🔽 CHOOSE BACKEND HERE
+# backend = LlamaBackend(
+#     model_path="models/stheno/L3-8B-Stheno-v3.2-Q4_K_M.gguf",
+#     n_gpu_layers=-1,
+#     n_ctx=4096,
+#     n_threads=8,
+#     n_batch=512,
+# )
+backend = HFStreamerBackend("Sao10K/L3-8B-Stheno-v3.2", device="cuda")
+logger.info("✅ Model backend loaded successfully.")
+
+# Config
+loader = ConfigLoader("scenarios.yml")
+session_recipes = {}  
+
 
 # =========================================================
 # Managers
@@ -153,36 +363,45 @@ prompt_manager = PromptManager(
 # =========================================================
 app = FastAPI()
 
+
 # =========================================================
 # SSE streaming bridge
 # =========================================================
-async def sse_stream_from_llama(session_id: str, request: Request) -> AsyncIterable[str]:
+async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> AsyncIterable[str]:
     base_id = f"chatcmpl_{uuid.uuid4().hex[:24]}"
     created = int(time.time())
 
     q: asyncio.Queue = asyncio.Queue()
     DONE = object()
 
-    # Get conversation history and build prompt
     history = conv_manager.get_history(session_id)
-    print(f"\tHistory: {history}")
-    prompt = prompt_manager.build_prompt(history)
+    logger.info(f"\tHistory: {history}")
+
+    # 🔑 Fetch recipe from memory
+    recipe = session_recipes[session_id]
+
+    tracker = conv_manager.get_or_create_tracker(session_id, recipe)
+    tracker.record_turn()
+
+    if tracker.should_advance():
+        tracker.advance()
+
+    prompt = prompt_manager.build_prompt(
+        milestone=tracker.current(),
+        history=history
+    )
 
     loop = asyncio.get_running_loop()
     full_text = []
 
     def producer():
-        """Run llama.cpp in a background thread and push chunks into a queue"""
         try:
-            for chunk in llm.create_completion(
-                prompt=prompt,
+            for text_delta in backend.stream(
+                prompt,
                 max_tokens=150,
                 stop=["Nurse:", "\nNurse:"],
-                stream=True,
             ):
-                text_delta = chunk["choices"][0].get("text", "")
-                if text_delta:
-                    asyncio.run_coroutine_threadsafe(q.put(text_delta), loop)
+                asyncio.run_coroutine_threadsafe(q.put(text_delta), loop)
         except Exception as e:
             asyncio.run_coroutine_threadsafe(q.put(e), loop)
         finally:
@@ -190,54 +409,58 @@ async def sse_stream_from_llama(session_id: str, request: Request) -> AsyncItera
 
     threading.Thread(target=producer, daemon=True).start()
 
-    # Initial assistant role message (OpenAI-style)
     head = {
         "id": base_id,
         "object": "chat.completion.chunk",
         "system_fingerprint": session_id,
         "created": created,
-        "model": model_path,
+        "model": str(backend),
         "choices": [{"delta": {"role": "assistant"}, "index": 0, "finish_reason": None}],
     }
     yield f"data: {json.dumps(head)}\n\n"
 
-    # Stream deltas to client
     while True:
         item = await q.get()
         if item is DONE:
+            logger.debug("🔴 DONE received from producer")  # DEBUG
             break
         if isinstance(item, Exception):
+            logger.debug(f"❌ Exception in producer: {item}")  # DEBUG
             break
         if await request.is_disconnected():
+            logger.debug("⚠️ Client disconnected")  # DEBUG
             break
 
+        logger.debug(f"🟡 SSE yielding: [{item}]")  # DEBUG
         full_text.append(item)
-
         chunk = {
             "id": base_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": model_path,
+            "model": str(backend),
             "choices": [{"delta": {"content": item}, "index": 0, "finish_reason": None}],
         }
         yield f"data: {json.dumps(chunk)}\n\n"
 
-    # Save assistant's full reply into history
-    assistant_reply = "".join(full_text)
-    if assistant_reply!="":
-        conv_manager.add_message(session_id, "assistant", assistant_reply)
-    print(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply[:50]}...")
+        await asyncio.sleep(0)  # let event loop flush
 
-    # Final stop chunk
+
+
+    assistant_reply = "".join(full_text)
+    if assistant_reply:
+        conv_manager.add_message(session_id, "assistant", assistant_reply)
+    logger.info(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply[:50]}...")
+
     final_chunk = {
         "id": base_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": model_path,
+        "model": str(backend),
         "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}],
     }
     yield f"data: {json.dumps(final_chunk)}\n\n"
     yield "data: [DONE]\n\n"
+
 
 # =========================================================
 # Endpoints
@@ -246,23 +469,21 @@ async def sse_stream_from_llama(session_id: str, request: Request) -> AsyncItera
 async def chat_completions(request: Request):
     """Main endpoint: receive user messages, stream assistant reply"""
     raw = await request.body()
-    print("📩 Raw:", raw.decode("utf-8"))
-    
+    logger.debug("📩 Raw:", raw.decode("utf-8"))
+
     body = json.loads(raw)
-    # session_id = body.get("session_id", "default")
     session_id = body.get("session_id", DEFAULT_SESSION_ID)
     if not session_id:
-        session_id = str(uuid.uuid4())  # auto-generate one
-        print(f"✨ Created new session: {session_id}")
-    
+        session_id = str(uuid.uuid4())
+        logger.info(f"✨ Created new session: {session_id}")
+
     user_messages = body.get("messages", [])
 
-    # Save user messages into history
     for m in user_messages:
         conv_manager.add_message(session_id, m["role"], m["content"])
 
     return StreamingResponse(
-        sse_stream_from_llama(session_id, request),
+        sse_stream(session_id, request, backend),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -271,12 +492,28 @@ async def chat_completions(request: Request):
         },
     )
 
+
 @app.post("/chat/new_session")
-async def new_session():
-    """Endpoint to create a new session (conversation)"""
-    session_id = str(uuid.uuid4())  # generate unique session id
-    # Optionally: you could insert a "system" message here if you want
-    return {"status": "ok", "session_id": session_id}
+async def new_session(recipe_id: str = None):
+    session_id = str(uuid.uuid4())
+
+    # Use loader defaults if recipe_id not provided
+    recipe = loader.get_recipe(recipe_id)
+    behaviour_level = recipe.behaviours.get_level(loader.get_default_behaviour_level())
+    tracker = MilestoneTracker(recipe.milestones, turns_per_step=loader.get_default_turns_per_step())
+
+    conv_manager.set_tracker(session_id, tracker)
+    session_recipes[session_id] = recipe
+
+    return {
+        "status": "ok",
+        "session_id": session_id,
+        "recipe_id": recipe.id,
+        "behaviour_level": behaviour_level.level
+    }
+
+
+
 
 @app.get("/chat/history/{session_id}")
 async def get_chat_history(session_id: str):
@@ -286,6 +523,7 @@ async def get_chat_history(session_id: str):
         "session_id": session_id,
         "history": history
     }
+
 
 @app.get("/escalation/{escalation}")
 async def get_escalation(escalation: str):
