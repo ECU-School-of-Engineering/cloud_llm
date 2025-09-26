@@ -21,6 +21,7 @@ API_URL = "http://localhost:8080/chat/completions"
 def send_message(message: str):
     """Send a message to the chat API using curl and stream the response"""
     payload = {
+        "session_id": "fba8a8e3-6d6e-1f10a-945c-4635e7c23946",
         "messages": [{"role": "user", "content": message}]
     }
     data_str = json.dumps(payload)

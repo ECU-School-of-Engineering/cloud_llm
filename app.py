@@ -15,7 +15,7 @@ import uuid
 import logging
 import yaml
 from typing import List, Dict
-
+from contextlib import asynccontextmanager
 # Configure logging 
 logging.basicConfig(
     level=logging.DEBUG,  # default log level
@@ -47,7 +47,12 @@ class BehaviourSet:
         self.levels = levels
 
     def get_level(self, level: int) -> BehaviourLevel:
-        return next(l for l in self.levels if l.level == level)
+        for l in self.levels:
+            if l.level == level:
+                return l
+        # fallback: return the highest defined level
+        return max(self.levels, key=lambda l: l.level)
+
 
 
 class Milestone:
@@ -146,14 +151,6 @@ class MilestoneTracker:
 # Conversation Manager: handles history persistence
 # =========================================================
 
-# =========================================================
-# Global session management
-# =========================================================
-DEFAULT_SESSION_ID = str(uuid.uuid4())  # created once at startup
-logger.info(f"✨ Default session initialized: {DEFAULT_SESSION_ID}")
-
-
-
 class ConversationManager:
     def __init__(self, db_path="conversations.db"):
         self.db_path = db_path
@@ -219,6 +216,34 @@ class ConversationManager:
             self.trackers[session_id] = MilestoneTracker(recipe.milestones)
         return self.trackers[session_id]
 
+## CREATE SESSION ####
+def create_session(session_id: str= str(uuid.uuid4()), recipe_id: str = None) -> dict:
+
+    # Use loader defaults if recipe_id not provided
+    recipe = loader.get_recipe(recipe_id)
+    behaviour_level = recipe.behaviours.get_level(loader.get_default_behaviour_level())
+    tracker = MilestoneTracker(recipe.milestones, turns_per_step=loader.get_default_turns_per_step())
+
+    conv_manager.set_tracker(session_id, tracker)
+    session_recipes[session_id] = recipe
+
+    # 🔹 Log the session info and recipe content
+    logger.info(f"✨ Created session: {session_id}")
+    logger.info(f"📖 Recipe ID: {recipe.id}")
+    logger.info(f"👤 Role: {recipe.role.name} ({recipe.role.id})")
+    logger.info(f"🎭 Character Behavior: {recipe.role.character_behavior.strip()}")
+    logger.info("🚩 Milestones: " + ", ".join(m.description for m in recipe.milestones))
+    logger.info("⚙️ Behaviours: " + ", ".join(f"{l.level}:{l.description}" for l in recipe.behaviours.levels))
+
+    return {
+        "status": "ok",
+        "session_id": session_id,
+        "recipe_id": recipe.id,
+        "behaviour_level": behaviour_level.level,
+    }
+
+
+
 # =========================================================
 # Prompt Manager: builds the final prompt for the model
 # =========================================================
@@ -227,17 +252,25 @@ class PromptManager:
         self.base_context = base_context.strip()
         self.character_behavior = character_behavior.strip()
 
-    def build_prompt(self, history: List[Dict]) -> str:
-        """Combine context, character, and conversation history into a prompt"""
-        prompt = f"{self.base_context}\n\n{self.character_behavior}\n\n"
+    def build_prompt(self, history: List[Dict], milestone: "Milestone" = None) -> str:
+        """Combine context, character, milestone, and conversation history into a prompt"""
+        prompt = f"{self.base_context}\n"
+        prompt += f"\nYour general behaviour is: {self.character_behavior}\n"
+
+        if milestone:
+            prompt += f"In the roleplay you are currently {milestone}\n"
+
+        prompt += f"So far the conversation has been: {milestone}\n"
         for msg in history:
             if msg["role"] == "user":
                 prompt += f"Nurse: {msg['content']}\n"
             elif msg["role"] == "assistant":
                 prompt += f"Patient: {msg['content']}\n"
+
         prompt += "Patient: "
         logger.info(f"📝 Prompt sent to model:\n{prompt}\n")
         return prompt
+
 
 
 # =========================================================
@@ -282,6 +315,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStream
 class HFStreamerBackend(LLMBackend):
     def __init__(self, model_name: str, device="cuda", **kwargs):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
@@ -300,25 +335,33 @@ class HFStreamerBackend(LLMBackend):
 
         generation_args = {
             "inputs": model_inputs.input_ids,
+            "attention_mask": model_inputs.attention_mask, 
             "max_new_tokens": max_tokens,
             "streamer": streamer,
-            "do_sample": True,   # make it generate richer text
+            "do_sample": True,
             "temperature": 0.7,
             "top_p": 0.9,
+            "pad_token_id": self.tokenizer.pad_token_id
         }
 
         thread = Thread(target=self.model.generate, kwargs=generation_args)
         thread.start()
 
         buffer = ""
-        for new_text in streamer:
-            logger.debug(f"🟢 HF streamer yielded: [{new_text}]")  # DEBUG
-            buffer += new_text
-            if stop and any(s in buffer for s in stop):
-                cut_idx = min(buffer.find(s) for s in stop if s in buffer)
-                yield buffer[:cut_idx]
-                return
-            yield new_text
+        last_len = 0
+        for text in streamer:
+            buffer += text
+
+            # compute delta
+            delta = buffer[last_len:]
+            last_len = len(buffer)
+
+            if delta.strip() == "":
+                continue  # skip empty fragments
+
+            logger.debug(f"🟢 Sending delta: [{delta}]")
+            yield delta
+
 
 
 
@@ -361,8 +404,20 @@ prompt_manager = PromptManager(
 # =========================================================
 # FastAPI app
 # =========================================================
-app = FastAPI()
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 🔹 Startup: create session(s)
+    startup_session = create_session()
+    logger.info(f"✨ Startup session created: {startup_session['session_id']} with recipe {startup_session['recipe_id']}")
+
+    # Yield control to the app
+    yield
+
+    # 🔹 Shutdown: cleanup if needed
+    logger.info("👋 Shutting down...")
+
+app = FastAPI(lifespan=lifespan)
 
 # =========================================================
 # SSE streaming bridge
@@ -451,6 +506,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         conv_manager.add_message(session_id, "assistant", assistant_reply)
     logger.info(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply[:50]}...")
 
+    # ✅ Only send a stop signal, not the whole text again
     final_chunk = {
         "id": base_id,
         "object": "chat.completion.chunk",
@@ -467,18 +523,24 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 # =========================================================
 @app.post("/chat/completions", response_class=StreamingResponse)
 async def chat_completions(request: Request):
-    """Main endpoint: receive user messages, stream assistant reply"""
     raw = await request.body()
-    logger.debug("📩 Raw:", raw.decode("utf-8"))
+    logger.debug(f"📩 Raw: {raw.decode('utf-8')}")
 
     body = json.loads(raw)
-    session_id = body.get("session_id", DEFAULT_SESSION_ID)
-    if not session_id:
-        session_id = str(uuid.uuid4())
-        logger.info(f"✨ Created new session: {session_id}")
-
+    session_id = body.get("session_id")
+    logger.info(f"📩 Session ID received: {session_id}")
+    # If no session_id was passed, create a proper new session
+    # if not session_id or session_id not in session_recipes:
+    #     session_data = create_session()
+    #     session_id = session_data["session_id"]
+    #     logger.info(f"✨ Created new session via /chat/completions: {session_id}")
+    if session_id not in session_recipes:
+        session_info = create_session(session_id)
+        session_recipes[session_id] = session_info["recipe"]
+        conv_manager.set_tracker(
+            session_id, MilestoneTracker(session_info["recipe"].milestones)
+        )
     user_messages = body.get("messages", [])
-
     for m in user_messages:
         conv_manager.add_message(session_id, m["role"], m["content"])
 
@@ -493,24 +555,10 @@ async def chat_completions(request: Request):
     )
 
 
+
 @app.post("/chat/new_session")
 async def new_session(recipe_id: str = None):
-    session_id = str(uuid.uuid4())
-
-    # Use loader defaults if recipe_id not provided
-    recipe = loader.get_recipe(recipe_id)
-    behaviour_level = recipe.behaviours.get_level(loader.get_default_behaviour_level())
-    tracker = MilestoneTracker(recipe.milestones, turns_per_step=loader.get_default_turns_per_step())
-
-    conv_manager.set_tracker(session_id, tracker)
-    session_recipes[session_id] = recipe
-
-    return {
-        "status": "ok",
-        "session_id": session_id,
-        "recipe_id": recipe.id,
-        "behaviour_level": behaviour_level.level
-    }
+    return create_session(recipe_id)
 
 
 
@@ -531,3 +579,4 @@ async def get_escalation(escalation: str):
     return {
         "escalation": escalation
     }
+
