@@ -18,7 +18,7 @@ from typing import List, Dict
 from contextlib import asynccontextmanager
 # Configure logging 
 logging.basicConfig(
-    level=logging.DEBUG,  # default log level
+    level=logging.INFO,  # default log level
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
@@ -258,16 +258,22 @@ class PromptManager:
         prompt += f"\nYour general behaviour is: {self.character_behavior}\n"
 
         if milestone:
-            prompt += f"In the roleplay you are currently {milestone}\n"
+            prompt += f"In the story arc of the roleplay you are currently {milestone}\n"
 
-        prompt += f"So far the conversation has been: {milestone}\n"
+        prompt += f"Here is the conversation so far (Nurse’s lines are already given, Barry’s lines are filled in):\n"
         for msg in history:
             if msg["role"] == "user":
                 prompt += f"Nurse: {msg['content']}\n"
             elif msg["role"] == "assistant":
                 prompt += f"Patient: {msg['content']}\n"
 
-        prompt += "Patient: "
+        #last line
+        last_nurse_msg = next((msg["content"] for msg in reversed(history) if msg["role"] == "user"), None)
+
+        if last_nurse_msg:
+            prompt += f"\nNow the Nurse asks:\nNurse: {last_nurse_msg}\n"
+        
+        prompt += "Your task: Write only Barry’s next line of dialogue. \n Barry:"
         logger.info(f"📝 Prompt sent to model:\n{prompt}\n")
         return prompt
 
@@ -294,7 +300,7 @@ class LlamaBackend(LLMBackend):
     def __init__(self, model_path: str, **kwargs):
         self.llm = Llama(model_path=model_path, **kwargs)
 
-    def stream(self, prompt: str, max_tokens=150, stop=None, **kwargs):
+    def stream(self, prompt: str, max_tokens=50, stop=None, **kwargs):
         for chunk in self.llm.create_completion(
             prompt=prompt,
             max_tokens=max_tokens,
@@ -385,21 +391,10 @@ session_recipes = {}
 
 
 # =========================================================
-# Managers
+# ConversationManager Manager
 # =========================================================
 conv_manager = ConversationManager()
-prompt_manager = PromptManager(
-    base_context="You are in a busy hospital in Melbourne, Australia.",
-    character_behavior="""
-- You're "Barry", a rough Australian man in his 40s.
-- You're annoyed because you've been waiting for hours.
-- You have a sharp pain in your left shoulder and want painkillers.
-- You're violent, blunt, rude, and impatient and use curse words.
-- Use casual Australian slang and expressions where appropriate.
-- Stay in character as if talking to a nurse.
-- Do not use symbols, keep it simple, conversational, and short.
-""",
-)
+
 
 # =========================================================
 # FastAPI app
@@ -432,8 +427,13 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     history = conv_manager.get_history(session_id)
     logger.info(f"\tHistory: {history}")
 
-    # 🔑 Fetch recipe from memory
+    # 🔑 Load
     recipe = session_recipes[session_id]
+    prompt_manager = PromptManager(
+    base_context=recipe.role.base_context,
+    character_behavior=recipe.role.character_behavior,
+    )
+    
 
     tracker = conv_manager.get_or_create_tracker(session_id, recipe)
     tracker.record_turn()
@@ -535,11 +535,12 @@ async def chat_completions(request: Request):
     #     session_id = session_data["session_id"]
     #     logger.info(f"✨ Created new session via /chat/completions: {session_id}")
     if session_id not in session_recipes:
-        session_info = create_session(session_id)
-        session_recipes[session_id] = session_info["recipe"]
+        create_session(session_id)   # this populates session_recipes
+        recipe = session_recipes[session_id]
         conv_manager.set_tracker(
-            session_id, MilestoneTracker(session_info["recipe"].milestones)
+            session_id, MilestoneTracker(recipe.milestones)
         )
+
     user_messages = body.get("messages", [])
     for m in user_messages:
         conv_manager.add_message(session_id, m["role"], m["content"])
