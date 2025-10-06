@@ -11,11 +11,12 @@ import time
 from typing import AsyncIterable, List, Dict
 import threading
 import sqlite3
-import uuid
 import logging
 import yaml
 from typing import List, Dict
 from contextlib import asynccontextmanager
+import re
+
 # Configure logging 
 logging.basicConfig(
     level=logging.INFO,  # default log level
@@ -23,6 +24,11 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+def strip_emotion_tags(text: str) -> str:
+    """Remove anything inside curly braces { ... } from a string."""
+    return re.sub(r"\{[^}]*\}", "", text).strip()
+
 
 ## Content classes ###
 #----------------------------------------------#
@@ -88,8 +94,8 @@ class ConfigLoader:
     def get_default_behaviour_level(self) -> int:
         return int(self.defaults.get("behaviour_level", 1))
 
-    def get_default_turns_per_step(self) -> int:
-        return int(self.defaults.get("turns_per_step", 3))
+    def get_default_turns_per_milestone(self) -> int:
+        return int(self.defaults.get("turns_per_milestone", 3))
 
     def get_recipe(self, recipe_id: str = None) -> Recipe:
         # Fall back to default recipe if not provided
@@ -126,11 +132,11 @@ class ConfigLoader:
 ##===========================
 # Milestone Tracker ####
 class MilestoneTracker:
-    def __init__(self, milestones: List[Milestone], turns_per_step: int = 3):
+    def __init__(self, milestones: List[Milestone], turns_per_milestone: int = 3):
         self.milestones = sorted(milestones, key=lambda m: m.order)
         self.index = 0
         self.turn_counter = 0
-        self.turns_per_step = turns_per_step
+        self.turns_per_milestone = turns_per_milestone
 
     def current(self) -> Milestone:
         return self.milestones[self.index]
@@ -139,7 +145,7 @@ class MilestoneTracker:
         self.turn_counter += 1
 
     def should_advance(self) -> bool:
-        return self.turn_counter >= self.turns_per_step and self.index < len(self.milestones) - 1
+        return self.turn_counter >= self.turns_per_milestone and self.index < len(self.milestones) - 1
 
     def advance(self):
         if self.should_advance():
@@ -158,9 +164,11 @@ class ConversationManager:
         self.trackers = {}
 
     def _init_db(self):
-        """Create table if it doesn't exist"""
+        """Create tables if they don't exist"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+
+        # Conversation history table
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS conversations (
             session_id TEXT,
@@ -170,8 +178,31 @@ class ConversationManager:
             PRIMARY KEY (session_id, turn_number)
         )
         """)
+
+        # Sessions tracking table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            recipe_id TEXT,
+            created_at TEXT
+        )
+        """)
+
         conn.commit()
         conn.close()
+
+    def log_session(self, session_id: str, recipe_id: str):
+        """Insert or update session info in the sessions table"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        cursor.execute("""
+            INSERT OR REPLACE INTO sessions (session_id, recipe_id, created_at)
+            VALUES (?, ?, ?)
+        """, (session_id, recipe_id, timestamp))
+        conn.commit()
+        conn.close()
+        logger.info(f"🧾 Logged session {session_id} ({recipe_id}) at {timestamp}")
 
     def add_message(self, session_id: str, role: str, content: str):
         """Insert a single message with next incremental turn_number"""
@@ -217,16 +248,20 @@ class ConversationManager:
         return self.trackers[session_id]
 
 ## CREATE SESSION ####
-def create_session(session_id: str= str(uuid.uuid4()), recipe_id: str = None) -> dict:
-
+def create_session(session_id: str= None, recipe_id: str = None) -> dict:
+    global last_session_id
+    if session_id is None:
+        session_id = str(uuid.uuid4())
     # Use loader defaults if recipe_id not provided
     recipe = loader.get_recipe(recipe_id)
     behaviour_level = recipe.behaviours.get_level(loader.get_default_behaviour_level())
-    tracker = MilestoneTracker(recipe.milestones, turns_per_step=loader.get_default_turns_per_step())
+    tracker = MilestoneTracker(recipe.milestones, turns_per_milestone=loader.get_default_turns_per_milestone())
 
     conv_manager.set_tracker(session_id, tracker)
     session_recipes[session_id] = recipe
+    conv_manager.log_session(session_id, recipe.id)
 
+    last_session_id = session_id
     # 🔹 Log the session info and recipe content
     logger.info(f"✨ Created session: {session_id}")
     logger.info(f"📖 Recipe ID: {recipe.id}")
@@ -252,30 +287,45 @@ class PromptManager:
         self.base_context = base_context.strip()
         self.character_behavior = character_behavior.strip()
 
-    def build_prompt(self, history: List[Dict], milestone: "Milestone" = None) -> str:
-        """Combine context, character, milestone, and conversation history into a prompt"""
-        prompt = f"{self.base_context}\n"
-        prompt += f"\nYour general behaviour is: {self.character_behavior}\n"
+    def build_messages(self, history: List[Dict], milestone: "Milestone" = None) -> List[Dict]:
+        """Return structured chat messages instead of a single prompt"""
 
+        # 🔹 System prompt: Barry’s persona + behaviour + optional milestone
+        system_prompt = f"{self.base_context}\n\nYour general behaviour is: {self.character_behavior}"
         if milestone:
-            prompt += f"In the story arc of the roleplay you are currently {milestone}\n"
+            system_prompt += f"\nIn the story arc of the roleplay you are currently {milestone}"
 
-        prompt += f"Here is the conversation so far (Nurse’s lines are already given, Barry’s lines are filled in):\n"
+        # 🔹 Build user-facing conversation (Nurse + Barry dialogue)
+        convo = "Here is the conversation so far:\n"
+        last_nurse_msg = next((msg for msg in reversed(history) if msg["role"] == "user"), None)
+
         for msg in history:
+            if msg is last_nurse_msg:
+                convo += "\n***Now the Nurse asks:***\n"
             if msg["role"] == "user":
-                prompt += f"Nurse: {msg['content']}\n"
+                convo += f"Nurse: {msg['content']}\n"
             elif msg["role"] == "assistant":
-                prompt += f"Patient: {msg['content']}\n"
+                convo += f"Barry: {msg['content']}\n"
 
-        #last line
-        last_nurse_msg = next((msg["content"] for msg in reversed(history) if msg["role"] == "user"), None)
+        # convo += (
+        #     "\nYour task: Write only Barry’s next line of dialogue in quotes "
+        #     "Do not add anything else. Do not explain. Do not write stage directions or cues. Do not write assistant\n"
+        # )
+        convo += (
+        "\nYour task: Write only Barry’s next line of dialogue. "
+        "Start directly with Barry’s words. "
+        "Do not include 'Barry:', 'Patient:', 'Assistant:', or any role labels. "
+        "Do not add narration, explanations, or stage directions.\n"
+        )
 
-        if last_nurse_msg:
-            prompt += f"\nNow the Nurse asks:\nNurse: {last_nurse_msg}\n"
-        
-        prompt += "Your task: Write only Barry’s next line of dialogue. \n Barry:"
-        logger.info(f"📝 Prompt sent to model:\n{prompt}\n")
-        return prompt
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": convo},
+        ]
+
+        logger.info(f"📝 Messages built for model:\n{messages}\n")
+        return messages
+
 
 
 
@@ -330,7 +380,19 @@ class HFStreamerBackend(LLMBackend):
         )
         self.device = device
 
-    def stream(self, prompt: str, max_tokens=150, stop=None, **kwargs):
+    def stream(self, messages_or_prompt, max_tokens=150, stop=None, **kwargs):
+        """
+        Stream text chunks.
+        Accepts either:
+        - messages: a list of {"role": "system"|"user"|"assistant", "content": "..."}
+        - or a raw prompt string.
+        """
+        # 🔹 Convert messages → prompt string if needed
+        if isinstance(messages_or_prompt, list):
+            prompt = self.tokenizer.apply_chat_template(messages_or_prompt, tokenize=False)
+        else:
+            prompt = messages_or_prompt  # fallback for raw string
+
         model_inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
 
         streamer = TextIteratorStreamer(
@@ -357,16 +419,13 @@ class HFStreamerBackend(LLMBackend):
         last_len = 0
         for text in streamer:
             buffer += text
-
-            # compute delta
             delta = buffer[last_len:]
             last_len = len(buffer)
-
             if delta.strip() == "":
-                continue  # skip empty fragments
-
+                continue
             logger.debug(f"🟢 Sending delta: [{delta}]")
             yield delta
+
 
 
 
@@ -413,6 +472,7 @@ async def lifespan(app: FastAPI):
     logger.info("👋 Shutting down...")
 
 app = FastAPI(lifespan=lifespan)
+last_session_id = None
 
 # =========================================================
 # SSE streaming bridge
@@ -441,10 +501,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     if tracker.should_advance():
         tracker.advance()
 
-    prompt = prompt_manager.build_prompt(
-        milestone=tracker.current(),
-        history=history
-    )
+    messages = prompt_manager.build_messages(history, milestone=tracker.current())
 
     loop = asyncio.get_running_loop()
     full_text = []
@@ -452,9 +509,9 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     def producer():
         try:
             for text_delta in backend.stream(
-                prompt,
+                messages,   # <--- just pass structured messages now
                 max_tokens=150,
-                stop=["Nurse:", "\nNurse:"],
+                stop=["Nurse:", "\nNurse:", "assistant", "Assistant:", "Patient:", "\nBarry:"],
             ):
                 asyncio.run_coroutine_threadsafe(q.put(text_delta), loop)
         except Exception as e:
@@ -501,10 +558,10 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
 
 
-    assistant_reply = "".join(full_text)
+    assistant_reply = "".join(full_text).strip()
     if assistant_reply:
         conv_manager.add_message(session_id, "assistant", assistant_reply)
-    logger.info(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply[:50]}...")
+    logger.info(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply}")
 
     # ✅ Only send a stop signal, not the whole text again
     final_chunk = {
@@ -527,8 +584,14 @@ async def chat_completions(request: Request):
     logger.debug(f"📩 Raw: {raw.decode('utf-8')}")
 
     body = json.loads(raw)
-    session_id = body.get("session_id")
+    session_id = body.get("session_id") or last_session_id
     logger.info(f"📩 Session ID received: {session_id}")
+
+    if not session_id:
+        # no session ever created yet → make one
+        session = create_session()
+        session_id = session["session_id"]
+
     # If no session_id was passed, create a proper new session
     # if not session_id or session_id not in session_recipes:
     #     session_data = create_session()
@@ -543,7 +606,8 @@ async def chat_completions(request: Request):
 
     user_messages = body.get("messages", [])
     for m in user_messages:
-        conv_manager.add_message(session_id, m["role"], m["content"])
+        clean_content = strip_emotion_tags(m["content"])
+        conv_manager.add_message(session_id, m["role"], clean_content)
 
     return StreamingResponse(
         sse_stream(session_id, request, backend),
@@ -559,6 +623,10 @@ async def chat_completions(request: Request):
 
 @app.post("/chat/new_session")
 async def new_session(recipe_id: str = None):
+    return create_session(recipe_id)
+
+@app.get("/chat/new_session")
+async def new_session_get(recipe_id: str = None):
     return create_session(recipe_id)
 
 
@@ -581,3 +649,11 @@ async def get_escalation(escalation: str):
         "escalation": escalation
     }
 
+@app.get("/chat/sessions")
+async def list_sessions():
+    conn = sqlite3.connect(conv_manager.db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT session_id, recipe_id, created_at FROM sessions ORDER BY created_at DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"session_id": r[0], "recipe_id": r[1], "created_at": r[2]} for r in rows]
