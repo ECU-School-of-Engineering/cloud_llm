@@ -19,7 +19,7 @@ import re
 
 # Configure logging 
 logging.basicConfig(
-    level=logging.INFO,  # default log level
+    level=logging.DEBUG,  # default log level
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
@@ -605,9 +605,14 @@ async def chat_completions(request: Request):
         )
 
     user_messages = body.get("messages", [])
-    for m in user_messages:
-        clean_content = strip_emotion_tags(m["content"])
-        conv_manager.add_message(session_id, m["role"], clean_content)
+    # for m in user_messages:
+    #     clean_content = strip_emotion_tags(m["content"])
+    #     conv_manager.add_message(session_id, m["role"], clean_content)
+    if user_messages:
+        latest = user_messages[-1]
+        if latest["role"] == "user":
+            clean_content = strip_emotion_tags(latest["content"])
+            conv_manager.add_message(session_id, "user", clean_content)
 
     return StreamingResponse(
         sse_stream(session_id, request, backend),
