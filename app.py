@@ -19,7 +19,7 @@ import re
 
 # Configure logging 
 logging.basicConfig(
-    level=logging.DEBUG,  # default log level
+    level=logging.INFO,  # default log level
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
@@ -175,6 +175,9 @@ class ConversationManager:
             turn_number INTEGER,
             role TEXT,
             content TEXT,
+            models_json TEXT,
+            milestone TEXT,
+            behaviour TEXT,
             PRIMARY KEY (session_id, turn_number)
         )
         """)
@@ -204,8 +207,8 @@ class ConversationManager:
         conn.close()
         logger.info(f"🧾 Logged session {session_id} ({recipe_id}) at {timestamp}")
 
-    def add_message(self, session_id: str, role: str, content: str):
-        """Insert a single message with next incremental turn_number"""
+    def add_message(self, session_id: str, role: str, content: str,
+                models_json: str = None, milestone: str = None, behaviour: str = None):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -217,24 +220,33 @@ class ConversationManager:
         next_turn = last_turn + 1
 
         cursor.execute(
-            "INSERT INTO conversations (session_id, turn_number, role, content) VALUES (?, ?, ?, ?)",
-            (session_id, next_turn, role, content)
+            """INSERT INTO conversations
+            (session_id, turn_number, role, content, models_json, milestone, behaviour)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, next_turn, role, content, models_json, milestone, behaviour)
         )
 
         conn.commit()
         conn.close()
 
+
+
     def get_history(self, session_id: str) -> List[Dict]:
-        """Fetch messages ordered by turn_number"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT role, content FROM conversations WHERE session_id = ? ORDER BY turn_number ASC",
-            (session_id,)
-        )
+        cursor.execute("""
+            SELECT role, content, milestone, behaviour
+            FROM conversations
+            WHERE session_id = ?
+            ORDER BY turn_number ASC
+        """, (session_id,))
         rows = cursor.fetchall()
         conn.close()
-        return [{"role": role, "content": content} for role, content in rows]
+        return [
+            {"role": role, "content": content, "milestone": milestone, "behaviour": behaviour}
+            for role, content, milestone, behaviour in rows
+        ]
+
 
     def get_tracker(self, session_id: str) -> "MilestoneTracker":
         return self.trackers.get(session_id)
@@ -292,15 +304,15 @@ class PromptManager:
 
         # 🔹 System prompt: Barry’s persona + behaviour + optional milestone
         system_prompt = f"{self.base_context}\n\nYour general behaviour is: {self.character_behavior}"
-        if milestone:
-            system_prompt += f"\nIn the story arc of the roleplay you are currently {milestone}"
-
+        
         # 🔹 Build user-facing conversation (Nurse + Barry dialogue)
         convo = "Here is the conversation so far:\n"
         last_nurse_msg = next((msg for msg in reversed(history) if msg["role"] == "user"), None)
 
         for msg in history:
             if msg is last_nurse_msg:
+                if milestone:
+                    convo += f"\nIn the story arc of the roleplay you are currently {milestone}"
                 convo += "\n***Now the Nurse asks:***\n"
             if msg["role"] == "user":
                 convo += f"Nurse: {msg['content']}\n"
@@ -560,7 +572,9 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     assistant_reply = "".join(full_text).strip()
     if assistant_reply:
-        conv_manager.add_message(session_id, "assistant", assistant_reply)
+        current_milestone = tracker.current().description
+        current_behaviour = recipe.role.character_behavior
+        conv_manager.add_message(session_id, "assistant", assistant_reply,milestone=current_milestone, behaviour=current_behaviour)
     logger.info(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply}")
 
     # ✅ Only send a stop signal, not the whole text again
@@ -612,7 +626,16 @@ async def chat_completions(request: Request):
         latest = user_messages[-1]
         if latest["role"] == "user":
             clean_content = strip_emotion_tags(latest["content"])
-            conv_manager.add_message(session_id, "user", clean_content)
+            models_json = json.dumps(latest.get("models", {}))  
+            current_milestone = conv_manager.get_tracker(session_id).current().description
+            current_behaviour = session_recipes[session_id].role.character_behavior
+            conv_manager.add_message(
+                session_id, "user", clean_content,
+                models_json=models_json,
+                milestone=current_milestone,
+                behaviour=current_behaviour
+            )
+
 
     return StreamingResponse(
         sse_stream(session_id, request, backend),
