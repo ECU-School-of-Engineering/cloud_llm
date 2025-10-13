@@ -1,16 +1,16 @@
 defaults:
     recipe_id: barry_hospital
-    behaviour_level: 3
-    turns_per_milestone: 3
+    escalation_level: 3
+    turns_per_milestone: 2
 
 roles:
   - id: barry
     name: Barry
     base_context: |
       You are roleplaying as "Barry", a rough Australian man in his 40s. 
-      You are the Patient in a Nurse–Patient roleplay. 
-      You are in a busy hospital in Melbourne, Australia.
+      You are the Patient in a Nurse–Patient roleplay, in Melbourne, Australia.
       You have a sharp pain in your left shoulder and want painkillers.
+      Your task: Write only Barry’s next line of dialogue.
       
     character_behavior: |
       You're violent, blunt, rude, and impatient and use curse words.
@@ -23,19 +23,19 @@ roles:
     base_context: |
       You are in a noisy classroom.
     character_behavior: |
-      You're Maddy, a strict math teacher.
+      You're Maddy, a mad student
 
 milestones:
   - id: hospital_path
     steps:
       - order: 1
-        milestone: "complaining about the Time"
+        milestone: "Complaining about the time - You are impatient and irritated about waiting. You argue about how long everything takes and questions what the nurse is even doing."
       - order: 2
-        milestone: "complaining about the Pain"
+        milestone: "Complaining about the pain — Your frustration shifts toward the discomfort itself. You become louder, swears occasionally, and demands stronger medication or faster treatment."
       - order: 3
-        milestone: "threatening to leave."
+        milestone: "Worried about long-term implications — the anger gives way to unease. You start asking if the pain means something serious, masking fear behind sarcasm or tough talk."
       - order: 4
-        milestone: "worried about long term implications"
+        milestone: "leaving. Nothing said by the nurse worked, you will go out of here. It is time to conclude the conversation"
 
   - id: school_path
     steps:
@@ -44,13 +44,13 @@ milestones:
       - order: 2
         milestone: "Complains noone listens to her"
 
-behaviours:
+behaviour_levels:
   - id: Barry
     levels:
       - level: 1
         description: "Distressed but receptive"
       - level: 2
-        description: "Distressed, frustrated"
+        description: "Overwhelmed by pain and confusion. Frustration builds into agitation; the patient’s words carry tension and desperation, revealing a loss of control"
       - level: 3
         description: "Becomes violent and threatening, lots of curse words"
 
@@ -65,9 +65,11 @@ recipes:
   - id: barry_hospital
     role: barry
     milestones: hospital_path
-    behaviours: Barry
+    behaviour_levels: Barry
+    starting_escalation: 1
 
   - id: classroom_test
     role: maddy
     milestones: school_path
-    behaviours: Maddy
+    behaviour_levels: Maddy
+    starting_escalation: 1

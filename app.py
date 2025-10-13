@@ -71,11 +71,12 @@ class Milestone:
 
 
 class Recipe:
-    def __init__(self, id: str, role: Role, behaviours: BehaviourSet, milestones: List[Milestone]):
+    def __init__(self, id: str, role: Role, behaviours: BehaviourSet, milestones: List[Milestone], starting_escalation: int = 1):
         self.id = id
         self.role = role
         self.behaviours = behaviours
         self.milestones = milestones
+        self.starting_escalation = starting_escalation
 
 ## Confing Loader classes ###
 #----------------------------------------------#
@@ -101,6 +102,7 @@ class ConfigLoader:
         # Fall back to default recipe if not provided
         recipe_id = recipe_id or self.get_default_recipe_id()
         recipe_data = next(r for r in self.config["recipes"] if r["id"] == recipe_id)
+        starting_escalation = int(recipe_data.get("starting_escalation", self.get_default_behaviour_level()))
 
         # Resolve role
         role_data = next(r for r in self.config["roles"] if r["id"] == recipe_data["role"])
@@ -112,7 +114,7 @@ class ConfigLoader:
         )
 
         # Resolve behaviour set
-        behaviours_data = next(b for b in self.config["behaviours"] if b["id"] == recipe_data["behaviours"])
+        behaviours_data = next(b for b in self.config["behaviour_levels"] if b["id"] == recipe_data["behaviour_levels"])
         behaviour_levels = [BehaviourLevel(l["level"], l["description"]) for l in behaviours_data["levels"]]
         behaviour_set = BehaviourSet(id=behaviours_data["id"], levels=behaviour_levels)
 
@@ -124,7 +126,8 @@ class ConfigLoader:
             id=recipe_data["id"],
             role=role,
             behaviours=behaviour_set,
-            milestones=milestones
+            milestones=milestones,
+            starting_escalation=starting_escalation
         )
 
 
@@ -178,6 +181,7 @@ class ConversationManager:
             models_json TEXT,
             milestone TEXT,
             behaviour TEXT,
+            escalation INTEGER,
             PRIMARY KEY (session_id, turn_number)
         )
         """)
@@ -208,7 +212,7 @@ class ConversationManager:
         logger.info(f"🧾 Logged session {session_id} ({recipe_id}) at {timestamp}")
 
     def add_message(self, session_id: str, role: str, content: str,
-                models_json: str = None, milestone: str = None, behaviour: str = None):
+                models_json: str = None, milestone: str = None, behaviour: str = None, escalation: int = None):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -221,10 +225,10 @@ class ConversationManager:
 
         cursor.execute(
             """INSERT INTO conversations
-            (session_id, turn_number, role, content, models_json, milestone, behaviour)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, next_turn, role, content, models_json, milestone, behaviour)
-        )
+            (session_id, turn_number, role, content, models_json, milestone, behaviour, escalation)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, next_turn, role, content, models_json, milestone, behaviour, escalation)
+)
 
         conn.commit()
         conn.close()
@@ -267,10 +271,12 @@ def create_session(session_id: str= None, recipe_id: str = None) -> dict:
     # Use loader defaults if recipe_id not provided
     recipe = loader.get_recipe(recipe_id)
     behaviour_level = recipe.behaviours.get_level(loader.get_default_behaviour_level())
+    session_escalations[session_id] = recipe.starting_escalation
     tracker = MilestoneTracker(recipe.milestones, turns_per_milestone=loader.get_default_turns_per_milestone())
 
     conv_manager.set_tracker(session_id, tracker)
     session_recipes[session_id] = recipe
+
     conv_manager.log_session(session_id, recipe.id)
 
     last_session_id = session_id
@@ -281,12 +287,14 @@ def create_session(session_id: str= None, recipe_id: str = None) -> dict:
     logger.info(f"🎭 Character Behavior: {recipe.role.character_behavior.strip()}")
     logger.info("🚩 Milestones: " + ", ".join(m.description for m in recipe.milestones))
     logger.info("⚙️ Behaviours: " + ", ".join(f"{l.level}:{l.description}" for l in recipe.behaviours.levels))
-
+    current_level = recipe.starting_escalation
+    current_behaviour = recipe.behaviours.get_level(current_level).description
     return {
         "status": "ok",
         "session_id": session_id,
         "recipe_id": recipe.id,
         "behaviour_level": behaviour_level.level,
+        "current_behaviour": current_behaviour,
     }
 
 
@@ -299,12 +307,14 @@ class PromptManager:
         self.base_context = base_context.strip()
         self.character_behavior = character_behavior.strip()
 
-    def build_messages(self, history: List[Dict], milestone: "Milestone" = None) -> List[Dict]:
+    def build_messages(self, history: List[Dict], milestone: "Milestone" = None, behaviour: "BehaviourLevel" = None) -> List[Dict]:
         """Return structured chat messages instead of a single prompt"""
 
-        # 🔹 System prompt: Barry’s persona + behaviour + optional milestone
+        # 🔹 System prompt: Barry’s persona + general behaviour + your behaviour_level
         system_prompt = f"{self.base_context}\n\nYour general behaviour is: {self.character_behavior}"
-        
+        if behaviour is not None:
+            system_prompt += f"\n\nYour current behaviour for this chat is: {behaviour.description}"
+
         # 🔹 Build user-facing conversation (Nurse + Barry dialogue)
         convo = "Here is the conversation so far:\n"
         last_nurse_msg = next((msg for msg in reversed(history) if msg["role"] == "user"), None)
@@ -459,7 +469,7 @@ logger.info("✅ Model backend loaded successfully.")
 # Config
 loader = ConfigLoader("scenarios.yml")
 session_recipes = {}  
-
+session_escalations: Dict[str, int] = {}
 
 # =========================================================
 # ConversationManager Manager
@@ -512,8 +522,10 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     if tracker.should_advance():
         tracker.advance()
-
-    messages = prompt_manager.build_messages(history, milestone=tracker.current())
+    level = session_escalations.get(session_id, loader.get_default_behaviour_level())
+    behaviour_level = recipe.behaviours.get_level(level)
+    current_behaviour = behaviour_level.description
+    messages = prompt_manager.build_messages(history, milestone=tracker.current(),behaviour=behaviour_level)
 
     loop = asyncio.get_running_loop()
     full_text = []
@@ -573,8 +585,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     assistant_reply = "".join(full_text).strip()
     if assistant_reply:
         current_milestone = tracker.current().description
-        current_behaviour = recipe.role.character_behavior
-        conv_manager.add_message(session_id, "assistant", assistant_reply,milestone=current_milestone, behaviour=current_behaviour)
+        conv_manager.add_message(session_id, "assistant", assistant_reply,milestone=current_milestone, behaviour=current_behaviour, escalation=level)
     logger.info(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply}")
 
     # ✅ Only send a stop signal, not the whole text again
@@ -613,11 +624,10 @@ async def chat_completions(request: Request):
     #     logger.info(f"✨ Created new session via /chat/completions: {session_id}")
     if session_id not in session_recipes:
         create_session(session_id)   # this populates session_recipes
-        recipe = session_recipes[session_id]
         conv_manager.set_tracker(
             session_id, MilestoneTracker(recipe.milestones)
         )
-
+    recipe = session_recipes[session_id]
     user_messages = body.get("messages", [])
     # for m in user_messages:
     #     clean_content = strip_emotion_tags(m["content"])
@@ -628,12 +638,14 @@ async def chat_completions(request: Request):
             clean_content = strip_emotion_tags(latest["content"])
             models_json = json.dumps(latest.get("models", {}))  
             current_milestone = conv_manager.get_tracker(session_id).current().description
-            current_behaviour = session_recipes[session_id].role.character_behavior
+            level = session_escalations.get(session_id, loader.get_default_behaviour_level())
+            current_behaviour = recipe.behaviours.get_level(level).description
             conv_manager.add_message(
                 session_id, "user", clean_content,
                 models_json=models_json,
                 milestone=current_milestone,
-                behaviour=current_behaviour
+                behaviour=current_behaviour,
+                escalation=level
             )
 
 
@@ -671,11 +683,27 @@ async def get_chat_history(session_id: str):
 
 
 @app.get("/escalation/{escalation}")
-async def get_escalation(escalation: str):
-    """Return the full conversation history for a given session_id"""
+async def get_escalation(escalation: int, session_id: str = None):
+    """
+    Get (and optionally set) the current escalation level.
+    If session_id is provided, store it for that session.
+    """
+    recipe_id = loader.get_default_recipe_id()
+    recipe = loader.get_recipe(recipe_id)
+
+    level = int(escalation)
+    behaviour = recipe.behaviours.get_level(level)
+
+    if session_id:
+        session_escalations[session_id] = level
+        logger.info(f"🔥 Escalation for session {session_id} set to {level}")
+
     return {
-        "escalation": escalation
+        "session_id": session_id,
+        "level": behaviour.level,
+        "behaviour": behaviour.description
     }
+
 
 @app.get("/chat/sessions")
 async def list_sessions():
@@ -685,3 +713,4 @@ async def list_sessions():
     rows = cursor.fetchall()
     conn.close()
     return [{"session_id": r[0], "recipe_id": r[1], "created_at": r[2]} for r in rows]
+
