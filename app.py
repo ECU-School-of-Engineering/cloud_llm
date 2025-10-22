@@ -16,7 +16,7 @@ import yaml
 from typing import List, Dict
 from contextlib import asynccontextmanager
 import re
-
+from fastapi.middleware.cors import CORSMiddleware
 # Configure logging 
 logging.basicConfig(
     level=logging.INFO,  # default log level
@@ -330,46 +330,54 @@ class PromptManager:
         self.base_context = base_context.strip()
         self.character_behavior = character_behavior.strip()
 
-    def build_messages(self, history: List[Dict], milestone: "Milestone" = None, behaviour: "BehaviourLevel" = None) -> List[Dict]:
-        """Return structured chat messages instead of a single prompt"""
+    def build_messages(
+        self,
+        history: List[Dict],
+        milestone: "Milestone" = None,
+        behaviour: "BehaviourLevel" = None,
+    ) -> List[Dict]:
+        """
+        Build chat messages in the correct structure for Llama-3-Instruct models.
+        """
 
-        # 🔹 System prompt: Barry’s persona + general behaviour + your behaviour_level
-        system_prompt = f"{self.base_context}\n\nYour general behaviour is: {self.character_behavior}"
-        if behaviour is not None:
-            system_prompt += f"\n\nYour current behaviour for this chat is: {behaviour.description}"
-
-        # 🔹 Build user-facing conversation (Nurse + Barry dialogue)
-        convo = "Here is the conversation so far:\n"
-        last_nurse_msg = next((msg for msg in reversed(history) if msg["role"] == "user"), None)
-
-        for msg in history:
-            if msg is last_nurse_msg:
-                if milestone:
-                    convo += f"\nIn the story arc of the roleplay you are currently {milestone}"
-                convo += "\n***Now the Nurse asks:***\n"
-            if msg["role"] == "user":
-                convo += f"Nurse: {msg['content']}\n"
-            elif msg["role"] == "assistant":
-                convo += f"Barry: {msg['content']}\n"
-
-        # convo += (
-        #     "\nYour task: Write only Barry’s next line of dialogue in quotes "
-        #     "Do not add anything else. Do not explain. Do not write stage directions or cues. Do not write assistant\n"
-        # )
-        convo += (
-        "\nYour task: Write only Barry’s next line of dialogue. "
-        "Start directly with Barry’s words. "
-        "Do not include 'Barry:', 'Patient:', 'Assistant:', or any role labels. "
-        "Do not add narration, explanations, or stage directions.\n"
+        # 🧩 SYSTEM MESSAGE (persona + behavior)
+        system_prompt = (
+            "You are an expert actor who fully immerses yourself in any role. "
+            "You never break character, even if referred to as an AI.\n\n"
+            f"Your current role context:\n{self.base_context}\n\n"
+            f"[General behaviour:] {self.character_behavior}"
         )
 
+        if behaviour:
+            system_prompt += f"\n[Current behaviour level:] {behaviour.description}"
+
+        # 🧩 USER MESSAGE (conversation context)
+        dialogue_lines = []
+        for msg in history:
+            speaker = "Nurse" if msg["role"] == "user" else "Barry"
+            dialogue_lines.append(f"{speaker}: {msg['content']}")
+
+        convo_text = "\n".join(dialogue_lines)
+
+        if milestone:
+            convo_text += f"\n\n[Story milestone:] {milestone.description}"
+
+        # 🧩 Final user instruction
+        convo_text += (
+            "\n\nNow, respond in character as Barry. "
+            "Write only Barry’s next line of dialogue — "
+            "no narration, stage directions, or speaker labels."
+        )
+
+        # ✅ Build chat structure — matches Llama 3’s expected schema
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": convo},
+            {"role": "user", "content": convo_text},
         ]
 
-        logger.info(f"📝 Messages built for model:\n{messages}\n")
+        logger.info(f"📝 Built Llama-3 formatted messages:\n{json.dumps(messages, indent=2)}")
         return messages
+
 
 
 
@@ -445,15 +453,16 @@ class HFStreamerBackend(LLMBackend):
             skip_prompt=True,
             skip_special_tokens=True,
         )
-
+        
         generation_args = {
             "inputs": model_inputs.input_ids,
             "attention_mask": model_inputs.attention_mask, 
             "max_new_tokens": max_tokens,
             "streamer": streamer,
             "do_sample": True,
-            "temperature": 0.7,
-            "top_p": 0.9,
+            "temperature": 1.12,       # Temperature 1.12 was the recommended lower less random
+            "top_p": 0.9,              # .9 lower less possible words
+            "repetition_penalty": 1.15,  # 
             "pad_token_id": self.tokenizer.pad_token_id
         }
 
@@ -487,6 +496,9 @@ class HFStreamerBackend(LLMBackend):
 #     n_batch=512,
 # )
 backend = HFStreamerBackend("Sao10K/L3-8B-Stheno-v3.2", device="cuda")
+# backend = HFStreamerBackend("unsloth/Mistral-Nemo-Instruct-2407", device="cuda")
+# backend = HFStreamerBackend("HumanLLMs/Human-Like-Mistral-Nemo-Instruct-2407", device="cuda")
+
 logger.info("✅ Model backend loaded successfully.")
 
 # Config
@@ -517,6 +529,16 @@ async def lifespan(app: FastAPI):
     logger.info("👋 Shutting down...")
 
 app = FastAPI(lifespan=lifespan)
+origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 last_session_id = None
 
 # =========================================================
@@ -556,7 +578,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     def producer():
         try:
             for text_delta in backend.stream(
-                messages,   # <--- just pass structured messages now
+                messages,   
                 max_tokens=150,
                 stop=["Nurse:", "\nNurse:", "assistant", "Assistant:", "Patient:", "\nBarry:"],
             ):
@@ -602,8 +624,6 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         yield f"data: {json.dumps(chunk)}\n\n"
 
         await asyncio.sleep(0)  # let event loop flush
-
-
 
     assistant_reply = "".join(full_text).strip()
     if assistant_reply:
@@ -737,3 +757,26 @@ async def list_sessions():
     conn.close()
     return [{"session_id": r[0], "recipe_id": r[1], "created_at": r[2]} for r in rows]
 
+@app.get("/chat/status/{session_id}")
+async def get_chat_status(session_id: str):
+    """
+    Return the current escalation level and milestone for a given session_id.
+    """
+    if session_id not in session_recipes:
+        return {"error": f"Session {session_id} not found."}
+
+    # Get recipe and escalation
+    recipe = session_recipes[session_id]
+    escalation = session_escalations.get(session_id, recipe.starting_escalation)
+    behaviour = recipe.behaviours.get_level(escalation)
+
+    # Get milestone tracker
+    tracker = conv_manager.get_or_create_tracker(session_id, recipe)
+    current_milestone = tracker.current().description
+
+    return {
+        "session_id": session_id,
+        "escalation_level": escalation,
+        "behaviour_description": behaviour.description,
+        "current_milestone": current_milestone,
+    }
