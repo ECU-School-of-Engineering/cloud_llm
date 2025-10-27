@@ -330,54 +330,47 @@ class PromptManager:
         self.base_context = base_context.strip()
         self.character_behavior = character_behavior.strip()
 
-    def build_messages(
-        self,
-        history: List[Dict],
-        milestone: "Milestone" = None,
-        behaviour: "BehaviourLevel" = None,
-    ) -> List[Dict]:
-        """
-        Build chat messages in the correct structure for Llama-3-Instruct models.
-        """
+    def build_messages(self, history: List[Dict], milestone: "Milestone" = None, behaviour: "BehaviourLevel" = None) -> List[Dict]:
+        """Return structured chat messages instead of a single prompt"""
 
-        # 🧩 SYSTEM MESSAGE (persona + behavior)
-        system_prompt = (
-            "You are an expert actor who fully immerses yourself in any role. "
-            "You never break character, even if referred to as an AI.\n\n"
-            f"Your current role context:\n{self.base_context}\n\n"
-            f"[General behaviour:] {self.character_behavior}"
-        )
+        # 🔹 System prompt: Barry’s persona + general behaviour + your behaviour_level
+        system_prompt = f"{self.base_context}\n\nYour general behaviour is: {self.character_behavior}"
+        if behaviour is not None:
+            system_prompt += f"\n\n Your current behaviour for this chat is: {behaviour.description}"
 
-        if behaviour:
-            system_prompt += f"\n[Current behaviour level:] {behaviour.description}"
+        # 🔹 Build user-facing conversation (Nurse + Barry dialogue)
+        convo = "Here is the conversation so far:\n"
+        last_nurse_msg = next((msg for msg in reversed(history) if msg["role"] == "user"), None)
 
-        # 🧩 USER MESSAGE (conversation context)
-        dialogue_lines = []
         for msg in history:
-            speaker = "Nurse" if msg["role"] == "user" else "Barry"
-            dialogue_lines.append(f"{speaker}: {msg['content']}")
+            if msg is last_nurse_msg:
+                if milestone:
+                    convo += f"\n[IMPORTANT:] In the story arc of the roleplay you are currently {milestone}."
+                convo += "\n[IMPORTANT:] Now the Nurse asks:\n"
+            if msg["role"] == "user":
+                convo += f"Nurse: {msg['content']}\n"
+            elif msg["role"] == "assistant":
+                convo += f"Barry: {msg['content']}\n"
 
-        convo_text = "\n".join(dialogue_lines)
-
-        if milestone:
-            convo_text += f"\n\n[Story milestone:] {milestone.description}"
-
-        # 🧩 Final user instruction
-        convo_text += (
-            "\n\nNow, respond in character as Barry. "
-            "Write only Barry’s next line of dialogue — "
-            "no narration, stage directions, or speaker labels."
+        # convo += (
+        #     "\nYour task: Write only Barry’s next line of dialogue in quotes "
+        #     "Do not add anything else. Do not explain. Do not write stage directions or cues. Do not write assistant\n"
+        # )
+        convo += (
+        "\nYour task is: Write only Barry’s next line of dialogue. "
+        "Start directly with Barry’s words. "
+        "Do not include 'Barry:', 'Patient:', 'Assistant:', or any role labels. "
+        "Do not add narration, explanations, or stage directions.\n"
+        "Make sure you use your story arc in your response"
         )
 
-        # ✅ Build chat structure — matches Llama 3’s expected schema
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": convo_text},
+            {"role": "user", "content": convo},
         ]
 
-        logger.info(f"📝 Built Llama-3 formatted messages:\n{json.dumps(messages, indent=2)}")
+        logger.info(f"📝 Messages built for model:\n{messages}\n")
         return messages
-
 
 
 
@@ -415,58 +408,123 @@ class LlamaBackend(LLMBackend):
                 yield text_delta
 
 
+# =========================================================
 # Backend 2: HF Transformers + TextIteratorStreamer
+# =========================================================
 import torch
 from threading import Thread
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
+torch.cuda.empty_cache()
+# 🔹 Generation presets (optional tuning per model)
+GENERATION_PRESETS = {
+    "sao_stheno": {
+        "temperature": 1.12,
+        "top_p": 0.9,
+        "repetition_penalty": 1.15,
+        "max_new_tokens": 150,
+    },
+    "openchat": {
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "repetition_penalty": 1.1,
+        "max_new_tokens": 200,
+    },
+    "vicuna": {
+        "temperature": 0.75,
+        "top_p": 0.9,
+        "repetition_penalty": 1.2,
+        "max_new_tokens": 220,
+    },
+}
+
 
 class HFStreamerBackend(LLMBackend):
-    def __init__(self, model_name: str, device="cuda", **kwargs):
+    def __init__(
+        self,
+        model_name: str,
+        device="cuda",
+        preset_name="openchat",
+        use_chat_template=True,       
+        **kwargs,
+    ):
+        self.use_chat_template = use_chat_template
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # self.model = AutoModelForCausalLM.from_pretrained(
+        #     model_name,
+        #     torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
+        #     # device_map="auto" if device.startswith("cuda") else None,
+        #     device_map={"": device} if device.startswith("cuda") else None,
+
+        # )
+
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
-            device_map="auto" if device.startswith("cuda") else None,
+            device_map="auto",
+            load_in_8bit=True,      # uses bitsandbytes, 50–70 % less VRAM
         )
         self.device = device
+        self.preset_name = preset_name
+        logger.info(f"✅ HFStreamerBackend initialized for {model_name} using preset '{preset_name}'")
 
-    def stream(self, messages_or_prompt, max_tokens=150, stop=None, **kwargs):
+    def stream(self, messages_or_prompt, preset_name=None, max_tokens=None, **kwargs):
         """
-        Stream text chunks.
-        Accepts either:
-        - messages: a list of {"role": "system"|"user"|"assistant", "content": "..."}
-        - or a raw prompt string.
+        Stream generated text chunks.
+        Accepts:
+          - messages: a list of dicts [{"role": "system"|"user"|"assistant", "content": "..."}]
+          - or a plain prompt string.
         """
-        # 🔹 Convert messages → prompt string if needed
+
+        # 🔹 Use preset config
+        preset_name = preset_name or self.preset_name
+        preset = GENERATION_PRESETS.get(preset_name, GENERATION_PRESETS["openchat"]).copy()
+
+        # Allow caller override of max_tokens
+        if max_tokens is not None:
+            preset["max_new_tokens"] = max_tokens
+
+        # 🔹 Convert messages → prompt string safely
         if isinstance(messages_or_prompt, list):
-            prompt = self.tokenizer.apply_chat_template(messages_or_prompt, tokenize=False)
+            prompt = None
+            if self.use_chat_template:
+                try:
+                    prompt = self.tokenizer.apply_chat_template(messages_or_prompt, tokenize=False)
+                except Exception as e:
+                    logger.warning(f"⚠️ chat_template failed: {e}")
+            # fallback if disabled or empty
+            if not prompt or len(prompt.strip()) < 10:
+                system_msg = next((m["content"] for m in messages_or_prompt if m["role"] == "system"), "")
+                user_msgs = [m["content"] for m in messages_or_prompt if m["role"] == "user"]
+                last_user = user_msgs[-1] if user_msgs else ""
+                prompt = f"### System:\n{system_msg}\n\n### User:\n{last_user}\n\n### Assistant:\n"
         else:
-            prompt = messages_or_prompt  # fallback for raw string
+            prompt = messages_or_prompt
 
-        model_inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
 
-        streamer = TextIteratorStreamer(
-            self.tokenizer,
-            skip_prompt=True,
-            skip_special_tokens=True,
-        )
-        
+        # 🔹 Tokenize input
+        model_inputs = self.tokenizer(prompt, return_tensors="pt", padding=True).to(self.device)
+
+        # 🔹 Streamer setup
+        streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+        # 🔹 Merge all generation args
         generation_args = {
             "inputs": model_inputs.input_ids,
-            "attention_mask": model_inputs.attention_mask, 
-            "max_new_tokens": max_tokens,
+            "attention_mask": model_inputs.attention_mask,
             "streamer": streamer,
-            "do_sample": True,
-            "temperature": 1.12,       # Temperature 1.12 was the recommended lower less random
-            "top_p": 0.9,              # .9 lower less possible words
-            "repetition_penalty": 1.15,  # 
-            "pad_token_id": self.tokenizer.pad_token_id
+            "pad_token_id": self.tokenizer.pad_token_id,
+            **preset,
         }
 
-        thread = Thread(target=self.model.generate, kwargs=generation_args)
+        # 🔹 Run generation in background thread
+        def run_generation():
+            with torch.no_grad():
+                self.model.generate(**generation_args)
+
+        thread = Thread(target=run_generation)
         thread.start()
 
         buffer = ""
@@ -477,7 +535,7 @@ class HFStreamerBackend(LLMBackend):
             last_len = len(buffer)
             if delta.strip() == "":
                 continue
-            logger.debug(f"🟢 Sending delta: [{delta}]")
+            logger.debug(f"🟢 HF Stream delta: [{delta}]")
             yield delta
 
 
@@ -495,7 +553,11 @@ class HFStreamerBackend(LLMBackend):
 #     n_threads=8,
 #     n_batch=512,
 # )
-backend = HFStreamerBackend("Sao10K/L3-8B-Stheno-v3.2", device="cuda")
+
+# backend = HFStreamerBackend("openchat/openchat", device="cuda", preset_name="openchat", use_chat_template=False)
+backend = HFStreamerBackend("Sao10K/L3-8B-Stheno-v3.2", device="cuda", preset_name="sao_stheno")
+# old
+# backend = HFStreamerBackend("Sao10K/L3-8B-Stheno-v3.2", device="cuda")
 # backend = HFStreamerBackend("unsloth/Mistral-Nemo-Instruct-2407", device="cuda")
 # backend = HFStreamerBackend("HumanLLMs/Human-Like-Mistral-Nemo-Instruct-2407", device="cuda")
 
