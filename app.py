@@ -359,11 +359,11 @@ class PromptManager:
         convo += (
         "\nYour task is: Write only Barry’s next line of dialogue. "
         "Start directly with Barry’s words. "
-        "Do not include 'Barry:', 'Patient:', 'Assistant:', or any role labels. "
         "Do not add narration, explanations, or stage directions.\n"
         "Make sure you use your story arc in your response"
+        "assistant:"
         )
-
+# "Do not start 'Barry', 'Patient', 'assistant', or any role labels. "
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": convo},
