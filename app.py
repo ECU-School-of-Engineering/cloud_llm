@@ -19,7 +19,7 @@ import re
 from fastapi.middleware.cors import CORSMiddleware
 # Configure logging 
 logging.basicConfig(
-    level=logging.INFO,  # default log level
+    level=logging.DEBUG,  # default log level
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
@@ -323,53 +323,59 @@ def create_session(session_id: str= None, recipe_id: str = None) -> dict:
 
 
 # =========================================================
-# Prompt Manager: builds the final prompt for the model
+# Prompt Manager: builds structured JSON prompts for the model
 # =========================================================
 class PromptManager:
     def __init__(self, base_context: str, character_behavior: str):
         self.base_context = base_context.strip()
         self.character_behavior = character_behavior.strip()
 
-    def build_messages(self, history: List[Dict], milestone: "Milestone" = None, behaviour: "BehaviourLevel" = None) -> List[Dict]:
-        """Return structured chat messages instead of a single prompt"""
+    def build_messages(
+        self,
+        history: List[Dict],
+        milestone: "Milestone" = None,
+        behaviour: "BehaviourLevel" = None,
+    ) -> List[Dict]:
+        """
+        Build a structured JSON-style prompt for consistent roleplay.
+        """
 
-        # 🔹 System prompt: Barry’s persona + general behaviour + your behaviour_level
-        system_prompt = f"{self.base_context}\n\nYour general behaviour is: {self.character_behavior}"
-        if behaviour is not None:
-            system_prompt += f"\n\n Your current behaviour for this chat is: {behaviour.description}"
-
-        # 🔹 Build user-facing conversation (Nurse + Barry dialogue)
-        convo = "Here is the conversation so far:\n"
-        last_nurse_msg = next((msg for msg in reversed(history) if msg["role"] == "user"), None)
-
-        for msg in history:
-            if msg is last_nurse_msg:
-                if milestone:
-                    convo += f"\n[IMPORTANT:] In the story arc of the roleplay you are currently {milestone}."
-                convo += "\n[IMPORTANT:] Now the Nurse asks:\n"
-            if msg["role"] == "user":
-                convo += f"Nurse: {msg['content']}\n"
-            elif msg["role"] == "assistant":
-                convo += f"Barry: {msg['content']}\n"
-
-        # convo += (
-        #     "\nYour task: Write only Barry’s next line of dialogue in quotes "
-        #     "Do not add anything else. Do not explain. Do not write stage directions or cues. Do not write assistant\n"
-        # )
-        convo += (
-        "\nYour task is: Write only Barry’s next line of dialogue. "
-        "Start directly with Barry’s words. "
-        "Do not add narration, explanations, or stage directions.\n"
-        "Make sure you use your story arc in your response"
-        "assistant:"
+        # ---- SYSTEM PROMPT ----
+        system_prompt = (
+            "You are a roleplaying AI actor.\n"
+            "You must output ONLY valid JSON with this structure:\n"
+            "{\n"
+            '  "reply": "Barry’s in-character spoken response",\n'
+            '  "emotion": "current emotion",\n'
+            '  "action": "short description of what Barry does",\n'
+            '  "in_character": "yes or no"\n'
+            "}\n\n"
+            "No explanations, no narration outside JSON."
         )
-# "Do not start 'Barry', 'Patient', 'assistant', or any role labels. "
+
+        # ---- STRUCTURED CONTEXT ----
+        structured_context = {
+            "situation": self.base_context,
+            "character_description": {
+                "behavior_baseline": self.character_behavior,
+                "current_behavior": behaviour.description if behaviour else None,
+            },
+            "story_arc": {
+                "current_milestone": str(milestone) if milestone else None,
+            },
+            "interaction_history": history[-6:] if history else [],
+        }
+
+        # ---- USER PROMPT ----
+        user_prompt = json.dumps(structured_context, indent=2)
+        user_prompt += "\n\nNow, as Barry, produce the next line of dialogue using your current_behavior and your current milestone in the story_arc in JSON format as specified.\nassistant:"
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": convo},
+            {"role": "user", "content": user_prompt},
         ]
 
-        logger.info(f"📝 Messages built for model:\n{messages}\n")
+        logger.info(f"🧠 Structured messages built for model:\n{json.dumps(messages, indent=2)}")
         return messages
 
 
@@ -396,7 +402,7 @@ class LlamaBackend(LLMBackend):
     def __init__(self, model_path: str, **kwargs):
         self.llm = Llama(model_path=model_path, **kwargs)
 
-    def stream(self, prompt: str, max_tokens=50, stop=None, **kwargs):
+    def stream(self, prompt: str, max_tokens=100, stop=None, **kwargs):
         for chunk in self.llm.create_completion(
             prompt=prompt,
             max_tokens=max_tokens,
@@ -616,35 +622,51 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     history = conv_manager.get_history(session_id)
     logger.info(f"\tHistory: {history}")
 
-    # 🔑 Load
+    # 🔑 Load recipe + context
     recipe = session_recipes[session_id]
     prompt_manager = PromptManager(
-    base_context=recipe.role.base_context,
-    character_behavior=recipe.role.character_behavior,
+        base_context=recipe.role.base_context,
+        character_behavior=recipe.role.character_behavior,
     )
-    
 
     tracker = conv_manager.get_or_create_tracker(session_id, recipe)
     tracker.record_turn()
-
     if tracker.should_advance():
         tracker.advance()
+
     level = session_escalations.get(session_id, recipe.starting_escalation)
     behaviour_level = recipe.behaviours.get_level(level)
     current_behaviour = behaviour_level.description
-    messages = prompt_manager.build_messages(history, milestone=tracker.current(),behaviour=behaviour_level)
+
+    messages = prompt_manager.build_messages(history, milestone=tracker.current(), behaviour=behaviour_level)
 
     loop = asyncio.get_running_loop()
-    full_text = []
+    full_json_text = []  # <- raw model output (full JSON)
+    reply_text_stream = []  # <- only text from "reply" field
 
     def producer():
         try:
+            inside_reply = False
             for text_delta in backend.stream(
-                messages,   
+                messages,
                 max_tokens=150,
                 stop=["Nurse:", "\nNurse:", "assistant", "Assistant:", "Patient:", "\nBarry:"],
             ):
-                asyncio.run_coroutine_threadsafe(q.put(text_delta), loop)
+                full_json_text.append(text_delta)  # ✅ collect everything
+
+                # Detect start/end of "reply" field
+                if '"reply"' in text_delta:
+                    inside_reply = True
+                    text_delta = text_delta.split(":", 1)[-1]
+                elif inside_reply and '"' in text_delta and text_delta.strip().endswith('",'):
+                    inside_reply = False
+                    text_delta = text_delta.replace('",', '')
+
+                if inside_reply:
+                    clean = text_delta.replace('"', '').replace("\\n", "\n")
+                    reply_text_stream.append(clean)
+                    asyncio.run_coroutine_threadsafe(q.put(clean), loop)
+
         except Exception as e:
             asyncio.run_coroutine_threadsafe(q.put(e), loop)
         finally:
@@ -652,6 +674,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     threading.Thread(target=producer, daemon=True).start()
 
+    # ---- Send header chunk ----
     head = {
         "id": base_id,
         "object": "chat.completion.chunk",
@@ -662,20 +685,16 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     }
     yield f"data: {json.dumps(head)}\n\n"
 
+    # ---- Stream reply tokens ----
     while True:
         item = await q.get()
         if item is DONE:
-            logger.debug("🔴 DONE received from producer")  # DEBUG
             break
         if isinstance(item, Exception):
-            logger.debug(f"❌ Exception in producer: {item}")  # DEBUG
             break
         if await request.is_disconnected():
-            logger.debug("⚠️ Client disconnected")  # DEBUG
             break
 
-        logger.debug(f"🟡 SSE yielding: [{item}]")  # DEBUG
-        full_text.append(item)
         chunk = {
             "id": base_id,
             "object": "chat.completion.chunk",
@@ -684,16 +703,44 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             "choices": [{"delta": {"content": item}, "index": 0, "finish_reason": None}],
         }
         yield f"data: {json.dumps(chunk)}\n\n"
+        await asyncio.sleep(0)
 
-        await asyncio.sleep(0)  # let event loop flush
+    # ---- End of stream ----
+    raw_full_output = "".join(full_json_text).strip()  # Full JSON
+    reply_text = "".join(reply_text_stream).strip()  # Just reply field text
 
-    assistant_reply = "".join(full_text).strip()
-    if assistant_reply:
-        current_milestone = tracker.current().description
-        conv_manager.add_message(session_id, "assistant", assistant_reply,milestone=current_milestone, behaviour=current_behaviour, escalation=level)
-    logger.info(f"💾 Saved assistant reply for [{session_id}]: {assistant_reply}")
+    logger.info(f"💬 Full model JSON output:\n{raw_full_output}")
+    logger.info(f"🗣️ Streamed reply text:\n{reply_text}")
 
-    # ✅ Only send a stop signal, not the whole text again
+    # ---- Try to parse structured fields ----
+    try:
+        parsed = json.loads(raw_full_output)
+        emotion = parsed.get("emotion", "")
+        action = parsed.get("action", "")
+        in_character = parsed.get("in_character", "")
+    except json.JSONDecodeError:
+        emotion = action = in_character = None
+        logger.warning("⚠️ Could not parse model JSON output.")
+
+    # ---- Save structured data ----
+    current_milestone = tracker.current().description
+    conv_manager.add_message(
+        session_id,
+        "assistant",
+        reply_text,
+        milestone=current_milestone,
+        behaviour=current_behaviour,
+        escalation=level,
+        models_json=json.dumps({
+            "full_output": raw_full_output,
+            "emotion": emotion,
+            "action": action,
+            "in_character": in_character,
+        }),
+    )
+    logger.info(f"💾 Saved assistant reply for [{session_id}]")
+
+    # ---- Final SSE close ----
     final_chunk = {
         "id": base_id,
         "object": "chat.completion.chunk",
@@ -703,6 +750,8 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     }
     yield f"data: {json.dumps(final_chunk)}\n\n"
     yield "data: [DONE]\n\n"
+
+
 
 
 # =========================================================
