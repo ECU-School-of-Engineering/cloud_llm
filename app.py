@@ -150,10 +150,25 @@ class MilestoneTracker:
     def should_advance(self) -> bool:
         return self.turn_counter >= self.turns_per_milestone and self.index < len(self.milestones) - 1
 
-    def advance(self):
-        if self.should_advance():
+    def advance(self, behaviour_level: int = None):
+        """Advance to the next milestone, with optional behavior-based overrides."""
+        if not self.should_advance():
+            return
+
+        # 🔹 Custom jump rule
+        if self.current().order == 3 and behaviour_level == 1:
+            logger.info("🚀 Skipping milestone 4 (jumping 3 → 5 Good ending)")
+            # jump +2 if possible
+            next_index = min(self.index + 2, len(self.milestones) - 1)
+            self.index = next_index
+        # 🔹 Rule 2: If currently at milestone 4 → stay at 4
+        elif self.current().order == 4:
+            logger.info("🛑 Staying on milestone 4 (no progression rule)")
+            # next_index = self.index  # remain here
+        else:
             self.index += 1
-            self.turn_counter = 0
+
+        self.turn_counter = 0
 
 
 # =========================================================
@@ -358,7 +373,8 @@ class PromptManager:
             '  "reply": "Barry’s in-character spoken response",\n'
             '  "emotion": "current emotion",\n'
             '  "action": "short description of what Barry does",\n'
-            '  "in_character": "yes or no"\n'
+            '  "escalation": "yes or no, assessing if what the nurse had said helps to calm Barry diwb",\n'
+            '  "summary": "sum up the conversation so far"\n'
             "}\n\n"
             "No explanations, no narration outside JSON."
         )
@@ -659,42 +675,62 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             full_json_text = []
             buffer = ""
             last_sent_idx = 0
+
+            reply_pattern = re.compile(r'"\s*reply"\s*:\s*"')
             emotion_pattern = re.compile(r'"\s*emotion"\s*:')
+
+            seen_reply_tag = False
             seen_emotion_tag = False
 
-            for text_delta in backend.stream(
-                messages,
-                max_tokens=400,
-                stop=None,
-            ):
+            FLUSH_CHARS = 40
+            FLUSH_DELAY = 0.05
+            last_flush = time.time()
+
+            for text_delta in backend.stream(messages, max_tokens=400, stop=None):
                 full_json_text.append(text_delta)
                 buffer += text_delta
 
-                if seen_emotion_tag:
-                    # Already hit the emotion tag → collect JSON only
-                    continue
+                # ---- detect start of "reply" ----
+                if not seen_reply_tag:
+                    match = reply_pattern.search(buffer)
+                    if match:
+                        last_sent_idx = match.end()
+                        seen_reply_tag = True
+                        logger.debug("🟢 Found start of 'reply' field")
+                    else:
+                        continue  # not yet reached the reply
 
-                match = emotion_pattern.search(buffer)
-                if match:
-                    # Found the emotion tag → send up to it, then stop
-                    cutoff_index = match.start()
+                # ---- detect end of reply ("emotion":) ----
+                if not seen_emotion_tag:
+                    match = emotion_pattern.search(buffer)
+                    if match:
+                        cutoff = match.start()
+                        # only send up to cutoff, excluding the tag itself
+                        new_text = buffer[last_sent_idx:cutoff]
+                        if new_text.strip():
+                            asyncio.run_coroutine_threadsafe(q.put(new_text), loop)
+                        seen_emotion_tag = True
+                        logger.debug("🟡 Stopped streaming before 'emotion' tag")
+                        # ⚠️ DO NOT break — keep reading to capture full JSON
+                        continue
 
-                    # Only send the new part up to the cutoff
-                    new_text = buffer[last_sent_idx:cutoff_index]
-                    if new_text.strip():
-                        asyncio.run_coroutine_threadsafe(q.put(new_text), loop)
+                # ---- stream normally until emotion is found ----
+                if not seen_emotion_tag:
+                    now = time.time()
+                    pending = buffer[last_sent_idx:]
+                    if len(pending) >= FLUSH_CHARS or (now - last_flush) > FLUSH_DELAY:
+                        if pending.strip():
+                            asyncio.run_coroutine_threadsafe(q.put(pending), loop)
+                        last_sent_idx = len(buffer)
+                        last_flush = now
 
-                    seen_emotion_tag = True
-                    logger.debug("🟡 Stopped streaming before 'emotion' tag")
-                    continue
+            # ---- flush any remainder of reply text (if emotion never appeared) ----
+            if seen_reply_tag and not seen_emotion_tag and last_sent_idx < len(buffer):
+                remainder = buffer[last_sent_idx:]
+                if remainder.strip():
+                    asyncio.run_coroutine_threadsafe(q.put(remainder), loop)
 
-                # Normal streaming: send only the new part since last iteration
-                new_text = buffer[last_sent_idx:]
-                last_sent_idx = len(buffer)
-                if new_text.strip():
-                    asyncio.run_coroutine_threadsafe(q.put(new_text), loop)
-
-            # ✅ Log final JSON for debugging
+            # ✅ Full JSON is now complete
             logger.info(f"💬 Full model JSON output:\n{''.join(full_json_text).strip()}")
 
         except Exception as e:
@@ -702,6 +738,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             asyncio.run_coroutine_threadsafe(q.put(e), loop)
         finally:
             asyncio.run_coroutine_threadsafe(q.put(DONE), loop)
+
 
     threading.Thread(target=producer, daemon=True).start()
     # ---- Send header chunk ----
@@ -753,6 +790,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         logger.warning("⚠️ Could not parse model JSON output.")
 
     # ---- Save structured data ----
+ 
     current_milestone = tracker.current().description
     conv_manager.add_message(
         session_id,
@@ -768,6 +806,8 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             "in_character": in_character,
         }),
     )
+
+
     logger.info(f"💾 Saved assistant reply for [{session_id}]")
 
     # ---- Final SSE close ----
