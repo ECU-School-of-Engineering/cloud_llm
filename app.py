@@ -195,6 +195,16 @@ class ConversationManager:
             created_at TEXT
         )
         """)
+        
+        # Feedback table (stores any arbitrary JSON feedback)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            payload_json TEXT,
+            created_at TEXT
+        )
+        """)
 
         conn.commit()
         conn.close()
@@ -402,7 +412,7 @@ class LlamaBackend(LLMBackend):
     def __init__(self, model_path: str, **kwargs):
         self.llm = Llama(model_path=model_path, **kwargs)
 
-    def stream(self, prompt: str, max_tokens=100, stop=None, **kwargs):
+    def stream(self, prompt: str, max_tokens=200, stop=None, **kwargs):
         for chunk in self.llm.create_completion(
             prompt=prompt,
             max_tokens=max_tokens,
@@ -646,34 +656,54 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     def producer():
         try:
-            inside_reply = False
+            full_json_text = []
+            buffer = ""
+            last_sent_idx = 0
+            emotion_pattern = re.compile(r'"\s*emotion"\s*:')
+            seen_emotion_tag = False
+
             for text_delta in backend.stream(
                 messages,
-                max_tokens=150,
-                stop=["Nurse:", "\nNurse:", "assistant", "Assistant:", "Patient:", "\nBarry:"],
+                max_tokens=400,
+                stop=None,
             ):
-                full_json_text.append(text_delta)  # ✅ collect everything
+                full_json_text.append(text_delta)
+                buffer += text_delta
 
-                # Detect start/end of "reply" field
-                if '"reply"' in text_delta:
-                    inside_reply = True
-                    text_delta = text_delta.split(":", 1)[-1]
-                elif inside_reply and '"' in text_delta and text_delta.strip().endswith('",'):
-                    inside_reply = False
-                    text_delta = text_delta.replace('",', '')
+                if seen_emotion_tag:
+                    # Already hit the emotion tag → collect JSON only
+                    continue
 
-                if inside_reply:
-                    clean = text_delta.replace('"', '').replace("\\n", "\n")
-                    reply_text_stream.append(clean)
-                    asyncio.run_coroutine_threadsafe(q.put(clean), loop)
+                match = emotion_pattern.search(buffer)
+                if match:
+                    # Found the emotion tag → send up to it, then stop
+                    cutoff_index = match.start()
+
+                    # Only send the new part up to the cutoff
+                    new_text = buffer[last_sent_idx:cutoff_index]
+                    if new_text.strip():
+                        asyncio.run_coroutine_threadsafe(q.put(new_text), loop)
+
+                    seen_emotion_tag = True
+                    logger.debug("🟡 Stopped streaming before 'emotion' tag")
+                    continue
+
+                # Normal streaming: send only the new part since last iteration
+                new_text = buffer[last_sent_idx:]
+                last_sent_idx = len(buffer)
+                if new_text.strip():
+                    asyncio.run_coroutine_threadsafe(q.put(new_text), loop)
+
+            # ✅ Log final JSON for debugging
+            logger.info(f"💬 Full model JSON output:\n{''.join(full_json_text).strip()}")
 
         except Exception as e:
+            logger.exception(f"Producer failed: {e}")
             asyncio.run_coroutine_threadsafe(q.put(e), loop)
         finally:
             asyncio.run_coroutine_threadsafe(q.put(DONE), loop)
 
     threading.Thread(target=producer, daemon=True).start()
-
     # ---- Send header chunk ----
     head = {
         "id": base_id,
@@ -758,29 +788,22 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 # Endpoints
 # =========================================================
 @app.post("/chat/completions", response_class=StreamingResponse)
-async def chat_completions(request: Request):
+async def chat_completions(request: Request, custom_session_id: str = None):
     raw = await request.body()
     logger.debug(f"📩 Raw: {raw.decode('utf-8')}")
 
     body = json.loads(raw)
-    session_id = body.get("session_id") or last_session_id
-    logger.info(f"📩 Session ID received: {session_id}")
+        # ✅ Priority order for session ID:
+    # custom_session_id (query param) > session_id (body) > last_session_id (fallback)
+    session_id = custom_session_id or body.get("session_id") or last_session_id
+    logger.info(f"📩 Using session_id: {session_id or '[new]'} (custom={bool(custom_session_id)})")
 
-    if not session_id:
-        # no session ever created yet → make one
-        session = create_session()
+    # ✅ If missing or unknown → create a new one
+    if not session_id or session_id not in session_recipes:
+        session = create_session(session_id)
         session_id = session["session_id"]
+        logger.info(f"✨ Created/initialized session: {session_id}")
 
-    # If no session_id was passed, create a proper new session
-    # if not session_id or session_id not in session_recipes:
-    #     session_data = create_session()
-    #     session_id = session_data["session_id"]
-    #     logger.info(f"✨ Created new session via /chat/completions: {session_id}")
-    if session_id not in session_recipes:
-        create_session(session_id)   # this populates session_recipes
-        conv_manager.set_tracker(
-            session_id, MilestoneTracker(recipe.milestones)
-        )
     recipe = session_recipes[session_id]
     user_messages = body.get("messages", [])
     # for m in user_messages:
@@ -840,7 +863,7 @@ async def get_chat_history(session_id: str):
 async def get_escalation(escalation: int, session_id: str = None):
     """
     Get (and optionally set) the current escalation level.
-    If session_id is provided, store it for that session.
+    If session_id is missing or unknown, create a new session for it.
     """
     recipe_id = loader.get_default_recipe_id()
     recipe = loader.get_recipe(recipe_id)
@@ -848,15 +871,27 @@ async def get_escalation(escalation: int, session_id: str = None):
     level = int(escalation)
     behaviour = recipe.behaviours.get_level(level)
 
-    if session_id:
-        session_escalations[session_id] = level
-        logger.info(f"🔥 Escalation for session {session_id} set to {level}")
+    # ✅ Case 1: No session_id provided → create a new one
+    if not session_id:
+        session = create_session()  # returns dict with new session_id
+        session_id = session["session_id"]
+        logger.info(f"✨ Created new session {session_id} via /escalation endpoint")
+
+    # ✅ Case 2: session_id provided but not yet known → initialize it
+    if session_id not in session_recipes:
+        create_session(session_id=session_id, recipe_id=recipe_id)
+        logger.info(f"✨ Initialized missing session {session_id} via /escalation endpoint")
+
+    # ✅ Update escalation level for this session
+    session_escalations[session_id] = level
+    logger.info(f"🔥 Escalation for session {session_id} set to {level}")
 
     return {
         "session_id": session_id,
         "level": behaviour.level,
-        "behaviour": behaviour.description
+        "behaviour": behaviour.description,
     }
+
 
 
 @app.get("/chat/sessions")
@@ -891,3 +926,31 @@ async def get_chat_status(session_id: str):
         "behaviour_description": behaviour.description,
         "current_milestone": current_milestone,
     }
+
+@app.post("/feedback")
+async def submit_feedback(request: Request, session_id: str):
+    """
+    Receive arbitrary feedback JSON and store it with the session_id.
+    Example:
+      POST /feedback?session_id=test-123
+      Body: { "rating": 5, "comment": "Great!" }
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {"raw_body": (await request.body()).decode("utf-8")}
+
+    conn = sqlite3.connect(conv_manager.db_path)
+    cursor = conn.cursor()
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+    cursor.execute("""
+        INSERT INTO feedback (session_id, payload_json, created_at)
+        VALUES (?, ?, ?)
+    """, (session_id, json.dumps(payload), timestamp))
+
+    conn.commit()
+    conn.close()
+
+    logger.info(f"📝 Feedback stored for session {session_id}: {payload}")
+    return {"status": "ok", "session_id": session_id, "stored_payload": payload}

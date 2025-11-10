@@ -26,6 +26,7 @@ roles:
       "ute" (instead of truck)
       "physio" (not physical therapist)
       "reckon" (not think/say, when casual)
+      "now" (instead of pronto)
       
   - id: maddy
     name: Maddy
@@ -38,13 +39,13 @@ milestones:
   - id: hospital_path
     steps:
       - order: 1
-        milestone: "Complaining about the time - You are impatient and irritated about waiting. You argue about how long everything takes and questions what the nurses are doing instead of helping you."
+        milestone: "Complaining about the time -You are impatient and irritated about waiting. You argue about how long everything takes and questions what the nurses are doing instead of helping you."
       - order: 2
-        milestone: "Complaining about the pain \u2014 Your frustration shifts toward the discomfort itself. You demand stronger medication or faster treatment."
+        milestone: "Complaining about the pain -Your frustration shifts toward the discomfort itself. You demand stronger medication or faster treatment."
       - order: 3
-        milestone: "Worried about long-term implications \u2014 You start questioning if the pain means something serious, how it will impact your job (You can't stop working)"
+        milestone: "Worried about long-term implications -You start questioning if the pain means something serious, how it will impact your job (You can't stop working)"
       - order: 4
-        milestone: "leaving. Nothing said by the nurse worked, you will go out of here. It is time to conclude the conversation"
+        milestone: "leaving. Nothing said by the nurse worked -You will go out of here. It is time to conclude the conversation"
 
   - id: school_path
     steps:
