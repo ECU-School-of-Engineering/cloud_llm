@@ -373,7 +373,7 @@ class PromptManager:
             '  "reply": "Barry’s in-character spoken response",\n'
             '  "emotion": "current emotion",\n'
             '  "action": "short description of what Barry does",\n'
-            '  "escalation": "yes or no, assessing if what the nurse had said helps to calm Barry diwb",\n'
+            '  "escalation": "yes or no, assessing if what the nurse had just said helps to calm down Barry",\n'
             '  "summary": "sum up the conversation so far"\n'
             "}\n\n"
             "No explanations, no narration outside JSON."
@@ -667,12 +667,12 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     messages = prompt_manager.build_messages(history, milestone=tracker.current(), behaviour=behaviour_level)
 
     loop = asyncio.get_running_loop()
-    full_json_text = []  # <- raw model output (full JSON)
+    full_json_text = []  # <- raw model output (full JSON from LLM)
     reply_text_stream = []  # <- only text from "reply" field
 
     def producer():
         try:
-            full_json_text = []
+            # full_json_text = []
             buffer = ""
             last_sent_idx = 0
 
@@ -721,6 +721,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                     if len(pending) >= FLUSH_CHARS or (now - last_flush) > FLUSH_DELAY:
                         if pending.strip():
                             asyncio.run_coroutine_threadsafe(q.put(pending), loop)
+                            reply_text_stream.append(pending)
                         last_sent_idx = len(buffer)
                         last_flush = now
 
@@ -731,7 +732,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                     asyncio.run_coroutine_threadsafe(q.put(remainder), loop)
 
             # ✅ Full JSON is now complete
-            logger.info(f"💬 Full model JSON output:\n{''.join(full_json_text).strip()}")
+            logger.info(f"💬 Full JSON completed")
 
         except Exception as e:
             logger.exception(f"Producer failed: {e}")
@@ -782,31 +783,34 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     # ---- Try to parse structured fields ----
     try:
         parsed = json.loads(raw_full_output)
+        reply = parsed.get("reply", "")
         emotion = parsed.get("emotion", "")
         action = parsed.get("action", "")
-        in_character = parsed.get("in_character", "")
-    except json.JSONDecodeError:
-        emotion = action = in_character = None
-        logger.warning("⚠️ Could not parse model JSON output.")
+        escalation_flag = parsed.get("escalation", "")
+        summary = parsed.get("summary", "")
+    except json.JSONDecodeError as e:
+        logger.warning(f"⚠️ Could not parse model JSON output: {e}")
+        reply = raw_full_output
+        emotion = action = escalation_flag = summary = None
 
-    # ---- Save structured data ----
- 
+    # Save structured data
     current_milestone = tracker.current().description
     conv_manager.add_message(
         session_id,
         "assistant",
-        reply_text,
+        reply or reply_text,  # prefer structured field if parsed
         milestone=current_milestone,
         behaviour=current_behaviour,
         escalation=level,
         models_json=json.dumps({
             "full_output": raw_full_output,
+            "reply": reply,
             "emotion": emotion,
             "action": action,
-            "in_character": in_character,
+            "escalation": escalation_flag,
+            "summary": summary,
         }),
     )
-
 
     logger.info(f"💾 Saved assistant reply for [{session_id}]")
 
