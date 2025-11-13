@@ -88,6 +88,16 @@ class ConfigLoader:
 
         # Grab defaults section if it exists
         self.defaults = self.config.get("defaults", {})
+        self.service_config = self.config.get("service_config", {}) 
+
+    def get_service_config(self) -> dict:
+        """Return runtime/service configuration section with defaults."""
+        return {
+            "flush_chars": int(self.service_config.get("flush_chars", 40)),
+            "flush_delay": float(self.service_config.get("flush_delay", 0.05)),
+            "max_tokens": int(self.service_config.get("max_tokens", 400)),
+            "stream_log_level": self.service_config.get("stream_log_level", "info"),
+        }
 
     def get_default_recipe_id(self) -> str:
         return self.defaults.get("recipe_id")
@@ -571,6 +581,38 @@ class HFStreamerBackend(LLMBackend):
             yield delta
 
 
+def reload_config():
+    """
+    Reload the YAML configuration and update all dependent globals.
+    """
+    global loader, SERVICE_CFG, session_recipes
+
+    logger.info("🔄 Reloading configuration from scenarios.yml...")
+    loader = ConfigLoader("scenarios.yml")
+    SERVICE_CFG = loader.get_service_config()
+
+    # Refresh all known recipes in memory
+    updated_recipes = {}
+    for session_id, old_recipe in session_recipes.items():
+        new_recipe = loader.get_recipe(old_recipe.id)
+        updated_recipes[session_id] = new_recipe
+        conv_manager.log_session(session_id, new_recipe)
+
+    session_recipes = updated_recipes
+
+    # Update log level
+    numeric_level = getattr(logging, SERVICE_CFG["log_level"].upper(), logging.INFO)
+    logging.getLogger().setLevel(numeric_level)
+    logger.setLevel(numeric_level)
+
+    logger.info(f"✅ Configuration reloaded successfully with service_config={SERVICE_CFG}")
+    return {
+        "status": "ok",
+        "service_config": SERVICE_CFG,
+        "reloaded_sessions": len(session_recipes)
+    }
+
+
 
 
 
@@ -597,6 +639,13 @@ logger.info("✅ Model backend loaded successfully.")
 
 # Config
 loader = ConfigLoader("scenarios.yml")
+SERVICE_CFG = loader.get_service_config()
+#logger
+numeric_level = getattr(logging, SERVICE_CFG["stream_log_level"].upper(), logging.INFO)
+logging.getLogger().setLevel(numeric_level)
+logger.setLevel(numeric_level)
+logger.info(f"🧩 Service config loaded: {SERVICE_CFG}")
+
 session_recipes = {}  
 session_escalations: Dict[str, int] = {}
 
@@ -682,8 +731,9 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             seen_reply_tag = False
             seen_emotion_tag = False
 
-            FLUSH_CHARS = 40
-            FLUSH_DELAY = 0.05
+            FLUSH_CHARS = SERVICE_CFG["flush_chars"]
+            FLUSH_DELAY = SERVICE_CFG["flush_delay"]
+
             last_flush = time.time()
 
             for text_delta in backend.stream(messages, max_tokens=400, stop=None):
@@ -752,7 +802,6 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         "choices": [{"delta": {"role": "assistant"}, "index": 0, "finish_reason": None}],
     }
     yield f"data: {json.dumps(head)}\n\n"
-
     # ---- Stream reply tokens ----
     while True:
         item = await q.get()
@@ -998,3 +1047,20 @@ async def submit_feedback(request: Request, session_id: str):
 
     logger.info(f"📝 Feedback stored for session {session_id}: {payload}")
     return {"status": "ok", "session_id": session_id, "stored_payload": payload}
+
+@app.post("/admin/reload_config")
+async def admin_reload_config():
+    """
+    Reload YAML configuration at runtime.
+    Updates:
+      - roles
+      - behaviour levels
+      - milestones
+      - service_config (flush, log level, tokens)
+    """
+    try:
+        result = reload_config()
+        return result
+    except Exception as e:
+        logger.exception("❌ Failed to reload config")
+        return {"status": "error", "detail": str(e)}
