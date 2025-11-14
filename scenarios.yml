@@ -85,3 +85,8 @@ recipes:
     milestones: school_path
     behaviour_levels: Maddy
     starting_escalation: 1
+
+service_config:
+  flush_chars: 100      # number of characters to accumulate before flush
+  flush_delay: 0.25     # max seconds between flushes
+  stream_log_level: debug
