@@ -27,6 +27,7 @@ roles:
       "physio" (not physical therapist) 
       "reckon" (not think/say, when casual) 
       "now" (instead of pronto) 
+      "Come on" (instead of Fair dinkum") 
       
   - id: maddy
     name: Maddy
@@ -43,7 +44,7 @@ milestones:
       - order: 2
         milestone: "Complaining about the amount of pain you are in -Your frustration shifts toward the discomfort itself. You demand stronger medication or faster treatment." 
       - order: 3
-        milestone: "Worried about long-term health or physical implications from the injury -You start questioning if the pain means something serious, how it might impact your job (you are worried about the serious financial implications of not being able to work) or your hobbies (sports)" 
+        milestone: "Worried about long term health - or physical implications from the injury -You start questioning if the pain means something serious, how it might impact your job (you are worried about the serious financial implications of not being able to work) or your hobbies (sports)" 
       - order: 4
         milestone: "Violence - If nothing said by the nurse has worked to calm you down and alleviate your concerns -You will get increasly verbally aggressive and finally physically strike the nurse in anger"
       - order: 5
@@ -89,4 +90,4 @@ recipes:
 service_config:
   flush_chars: 100      # number of characters to accumulate before flush
   flush_delay: 0.25     # max seconds between flushes
-  stream_log_level: debug
+  stream_log_level: info

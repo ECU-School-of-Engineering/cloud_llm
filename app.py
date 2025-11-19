@@ -162,23 +162,40 @@ class MilestoneTracker:
 
     def advance(self, behaviour_level: int = None):
         """Advance to the next milestone, with optional behavior-based overrides."""
+        logger.info(f"🛑 START advance | current.order={self.current().order}, behaviour={behaviour_level}, index={self.index}")
+
         if not self.should_advance():
             return
 
-        # 🔹 Custom jump rule
+        # Default: go to next milestone
+        next_index = self.index + 1
+
+        # 🔹 Rule 1: Jump from order 3 to order 5 if behaviour==1
         if self.current().order == 3 and behaviour_level == 1:
-            logger.info("🚀 Skipping milestone 4 (jumping 3 → 5 Good ending)")
-            # jump +2 if possible
-            next_index = min(self.index + 2, len(self.milestones) - 1)
+            logger.info("🚀 Jump rule triggered (3 → 5, good ending)")
+            try:
+                next_index = next(
+                    i for i, m in enumerate(self.milestones)
+                    if m.order == 5
+                )
+            except StopIteration:
+                logger.warning("⚠️ Could not find milestone with order=5; staying put.")
+                next_index = self.index
+
+        # 🔹 Rule 2: Stay at milestone 4 or 5
+        elif self.current().order in (4, 5):
+            logger.info("🛑 Staying on current milestone (4 or 5, no progression rule)")
+            next_index = self.index
+
+        # Apply update
+        if 0 <= next_index < len(self.milestones):
             self.index = next_index
-        # 🔹 Rule 2: If currently at milestone 4 → stay at 4
-        elif self.current().order == 4:
-            logger.info("🛑 Staying on milestone 4 (no progression rule)")
-            # next_index = self.index  # remain here
         else:
-            self.index += 1
+            logger.warning(f"⚠️ Invalid next_index {next_index}, staying at {self.index}")
 
         self.turn_counter = 0
+        logger.info(f"✅ END advance | new.order={self.current().order}, index={self.index}, behaviour={behaviour_level}")
+
 
 
 # =========================================================
@@ -464,7 +481,7 @@ GENERATION_PRESETS = {
         "temperature": 1.12,
         "top_p": 0.9,
         "repetition_penalty": 1.15,
-        "max_new_tokens": 150,
+        "max_new_tokens": 250,
     },
     "openchat": {
         "temperature": 0.8,
@@ -693,6 +710,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     q: asyncio.Queue = asyncio.Queue()
     DONE = object()
+    REPY_DONE = object()
 
     history = conv_manager.get_history(session_id)
     logger.info(f"\tHistory: {history}")
@@ -704,14 +722,14 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         character_behavior=recipe.role.character_behavior,
     )
 
-    tracker = conv_manager.get_or_create_tracker(session_id, recipe)
-    tracker.record_turn()
-    if tracker.should_advance():
-        tracker.advance()
-
     level = session_escalations.get(session_id, recipe.starting_escalation)
     behaviour_level = recipe.behaviours.get_level(level)
     current_behaviour = behaviour_level.description
+
+    tracker = conv_manager.get_or_create_tracker(session_id, recipe)
+    tracker.record_turn()
+    if tracker.should_advance():
+        tracker.advance(level)
 
     messages = prompt_manager.build_messages(history, milestone=tracker.current(), behaviour=behaviour_level)
 
@@ -762,6 +780,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                         seen_emotion_tag = True
                         logger.debug("🟡 Stopped streaming before 'emotion' tag")
                         # ⚠️ DO NOT break — keep reading to capture full JSON
+                        asyncio.run_coroutine_threadsafe(q.put(REPY_DONE), loop)
                         continue
 
                 # ---- stream normally until emotion is found ----
@@ -799,12 +818,24 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         "system_fingerprint": session_id,
         "created": created,
         "model": str(backend),
-        "choices": [{"delta": {"role": "assistant"}, "index": 0, "finish_reason": None}],
+        "choices": [{"delta": {"content":"","role": "assistant"}, "index": 0}],
     }
     yield f"data: {json.dumps(head)}\n\n"
     # ---- Stream reply tokens ----
     while True:
         item = await q.get()
+        if item is REPY_DONE:
+            final_chunk = {
+            "id": base_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": str(backend),
+            "choices": [{"delta": {},"finish_reason": "stop","index": 0}],
+            }
+            print(f"CHUNK: {json.dumps(final_chunk)}")
+            yield f"data: {json.dumps(final_chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+            continue
         if item is DONE:
             break
         if isinstance(item, Exception):
@@ -817,10 +848,15 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             "object": "chat.completion.chunk",
             "created": created,
             "model": str(backend),
-            "choices": [{"delta": {"content": item}, "index": 0, "finish_reason": None}],
+            "choices": [{"delta": {"content": item},"index": 0}]            
         }
+        print(f"CHUNK: {json.dumps(chunk)}")
         yield f"data: {json.dumps(chunk)}\n\n"
         await asyncio.sleep(0)
+
+# ---- Final SSE close ----
+    ##Final chunk
+    
 
     # ---- End of stream ----
     raw_full_output = "".join(full_json_text).strip()  # Full JSON
@@ -861,18 +897,16 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         }),
     )
 
-    logger.info(f"💾 Saved assistant reply for [{session_id}]")
+    logger.info(f"""💾 Saved assistant reply for [{session_id}: {json.dumps({
+            "full_output": raw_full_output,
+            "reply": reply,
+            "emotion": emotion,
+            "action": action,
+            "escalation": escalation_flag,
+            "summary": summary,
+        })}]""")
+    #ZZZ Final SSE was here
 
-    # ---- Final SSE close ----
-    final_chunk = {
-        "id": base_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": str(backend),
-        "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}],
-    }
-    yield f"data: {json.dumps(final_chunk)}\n\n"
-    yield "data: [DONE]\n\n"
 
 
 
