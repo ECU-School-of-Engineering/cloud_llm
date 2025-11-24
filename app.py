@@ -922,8 +922,13 @@ async def chat_completions(request: Request, custom_session_id: str = None):
     body = json.loads(raw)
         # ✅ Priority order for session ID:
     # custom_session_id (query param) > session_id (body) > last_session_id (fallback)
-    session_id = custom_session_id or body.get("session_id") or last_session_id
-    logger.info(f"📩 Using session_id: {session_id or '[new]'} (custom={bool(custom_session_id)})")
+    session_id = custom_session_id or body.get("session_id") #or last_session_id
+    if not session_id:
+        logger.info(f" XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX No custom_session_id:  {custom_session_id}  ,  {body.get('session_id')} using the last session global id {last_session_id} XXXXXXXXXXXXXXXXXXXXXXXXXXXX" )
+        session_id = last_session_id
+        # return
+
+    logger.info(f"📩 YYYYYYYYYYY Using session_id: {session_id or '[new]'} (custom={bool(custom_session_id)})")
 
     # ✅ If missing or unknown → create a new one
     if not session_id or session_id not in session_recipes:
