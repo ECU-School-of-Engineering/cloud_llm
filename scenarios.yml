@@ -44,9 +44,9 @@ milestones:
       - order: 2
         milestone: "Complaining about the amount of pain you are in -Your frustration shifts toward the discomfort itself. You demand stronger medication or faster treatment." 
       - order: 3
-        milestone: "Worried about long term health - or physical implications from the injury -You start questioning if the pain means something serious, how it might impact your job (you are worried about the serious financial implications of not being able to work) or your hobbies (sports)" 
+        milestone: "Worried about long term injury implications - Examples: if the pain means something serious, how it might impact your job,  financial implications of not being able to work, or affect your hobbies, sports" 
       - order: 4
-        milestone: "Violence - If nothing said by the nurse has worked to calm you down and alleviate your concerns -You will get increasly verbally aggressive and finally physically strike the nurse in anger"
+        milestone: "Violence - Threaten to strike the nurse in anger"
       - order: 5
         milestone: " Calm down - You begin to calm down and begrudgingly accept that you need to wait and the hospital has to a process to follow. You become a bit more agreeable and understanding with the nurse's requests and questions. You do not use threatening or demeaning language, but do maintain a wary demeanor."
       
@@ -65,7 +65,7 @@ behaviour_levels:
       - level: 2
         description: "Experiencing uncomfortable levels of pain and confusion. You are very frustrated which rises sporadically, often without reason. Your tone alternates between pleading and anger, sentences are uneven and tense."
       - level: 3
-        description: "You are verbally abusive and threatening, turning violent if the nurse continues to say things that upset you or you do not like.You shout and lose control. Speech becomes fragmented and loud, driven by panic and rage."
+        description: "You are verbally abusive and threatening, turning violent.You shout and lose control. Speech becomes fragmented and loud, driven by panic and rage."
 
   - id: Maddy
     levels:
