@@ -705,6 +705,7 @@ session_recipes = {}
 session_escalations: Dict[str, int] = {}
 session_hume_talking = {}      
 session_last_user_input = {}
+session_last_user_models = {}
 session_latest_partial = {}    # key: (session_id, phrase_id) → latest end value
 session_active_generation = {}  # key: session_id → (phrase_id, partial_id)
 
@@ -947,7 +948,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         summary = parsed.get("summary", "")
     except json.JSONDecodeError as e:
         logger.warning(f"⚠️ Could not parse model JSON output: {e}")
-        reply = raw_full_output
+        reply = reply_text
         emotion = action = escalation_flag = summary = None
 
     # Save data DB
@@ -964,7 +965,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         # (only at the end of LLM streaming)
         # -----------------------------------------------
         final_user_msg = session_last_user_input.get(session_id, "")
-        models_json = "{}"  # optional; keep empty or fill if needed
+        models_json = session_last_user_models.get(session_id, "{}")
 
         current_milestone = tracker.current().description
         current_behaviour = behaviour_level.description
@@ -1060,7 +1061,8 @@ async def chat_completions(request: Request, custom_session_id: str = None):
                 # Clean content
                 clean_content = strip_emotion_tags(msg["content"])
                 session_last_user_input[session_id] = clean_content
-
+                if "models" in msg:
+                    session_last_user_models[session_id] = json.dumps(msg["models"])
                 # Track latest partial for this phrase
                 session_latest_partial[(session_id, phrase_id)] = partial_id
 
