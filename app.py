@@ -156,6 +156,7 @@ class MilestoneTracker:
 
     def record_turn(self):
         self.turn_counter += 1
+        logger.debug(f"⚠️ counter = {self.turn_counter}")
 
     def should_advance(self) -> bool:
         return self.turn_counter >= self.turns_per_milestone and self.index < len(self.milestones) - 1
@@ -458,7 +459,7 @@ class PromptManager:
 
         # ---- USER PROMPT ----
         user_prompt = json.dumps(structured_context, indent=2)
-        user_prompt += "\n\nNow, as Barry, produce the next line of dialogue using your current_behavior and your current milestone in the story_arc in JSON format as specified.\nassistant:"
+        user_prompt += "\n\nNow, as Barry, produce the next line of dialogue remember to use your current_behavior and your current_milestone in the story_arc in JSON format as specified.\nassistant:"
 
         messages = [
             {"role": "system", "content": system_prompt},
