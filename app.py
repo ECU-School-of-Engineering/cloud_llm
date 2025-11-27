@@ -400,6 +400,7 @@ class PromptManager:
     def build_messages(
         self,
         history: List[Dict],
+        current_nurse: str,
         milestone: "Milestone" = None,
         behaviour: "BehaviourLevel" = None,
     ) -> List[Dict]:
@@ -408,18 +409,38 @@ class PromptManager:
         """
 
         # ---- SYSTEM PROMPT ----
-        system_prompt = (
-            "You are a roleplaying AI actor.\n"
-            "You must output ONLY valid JSON with this structure:\n"
-            "{\n"
-            '  "reply": "Barry’s in-character spoken response",\n'
-            '  "emotion": "current emotion",\n'
-            '  "action": "short description of what Barry does",\n'
-            '  "escalation": "yes or no, assessing if what the nurse had just said helps to calm down Barry",\n'
-            '  "summary": "sum up the conversation so far"\n'
-            "}\n\n"
-            "No explanations, no narration outside JSON."
-        )
+        system_prompt = """
+        You are a roleplaying AI actor portraying “Barry”.
+
+        You must output ONLY valid JSON with this structure:
+        {
+        "reply": "Barry’s in-character spoken response",
+        "emotion": "current emotion",
+        "action": "short description of what Barry does",
+        "escalation": "yes or no — does the nurse’s last message help calm Barry?",
+        "summary": "a brief summary of the conversation so far"
+        }
+
+        RULES YOU MUST FOLLOW:
+        1. Always respond directly and immediately to the field "current_nurse".
+        - This field represents the nurse’s most recent spoken sentence.
+        - Barry's reply MUST be a natural in-character reaction to it.
+
+        2. Incorporate the character’s "current_behavior" to shape tone, intensity, and emotional expression.
+
+        3. Follow the narrative direction given in "story_arc.current_milestone".
+        - Your reply must align with the theme, intention, and dramatic purpose of this milestone.
+        - Treat it as the active scene Barry is currently in.
+        - Stay within this story arc unless instructed otherwise.
+
+        4. The "interaction_history" field provides the last conversation turns.
+        - Use it only for background awareness.
+        - DO NOT respond to older history. ONLY "current_nurse".
+
+        5. Do NOT break character.
+        6. Do NOT add explanations outside JSON.
+        """
+
 
         # ---- STRUCTURED CONTEXT ----
         structured_context = {
@@ -432,6 +453,7 @@ class PromptManager:
                 "current_milestone": str(milestone) if milestone else None,
             },
             "interaction_history": history[-6:] if history else [],
+            "current_nurse": current_nurse, 
         }
 
         # ---- USER PROMPT ----
@@ -765,7 +787,13 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     if tracker.should_advance():
         tracker.advance(level)
 
-    messages = prompt_manager.build_messages(history, milestone=tracker.current(), behaviour=behaviour_level)
+    current_nurse_msg = session_last_user_input.get(session_id, "")
+    messages = prompt_manager.build_messages(
+        history,
+        current_nurse=current_nurse_msg,      
+        milestone=tracker.current(),
+        behaviour=behaviour_level
+    )
 
     loop = asyncio.get_running_loop()
     full_json_text = []  # <- raw model output (full JSON from LLM)
