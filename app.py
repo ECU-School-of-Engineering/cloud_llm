@@ -665,7 +665,8 @@ logger.info(f"🧩 Service config loaded: {SERVICE_CFG}")
 
 session_recipes = {}  
 session_escalations: Dict[str, int] = {}
-
+session_hume_talking = {}      # True while Hume/ASR is still sending updates
+session_last_user_input = {}   # Holds the last FULL version of the user message
 # =========================================================
 # ConversationManager Manager
 # =========================================================
@@ -812,6 +813,8 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     threading.Thread(target=producer, daemon=True).start()
     # ---- Send header chunk ----
+    session_hume_talking[session_id] = False
+    logger.debug(f"🟡 Setting {session_id} to {session_hume_talking[session_id]}")
     head = {
         "id": base_id,
         "object": "chat.completion.chunk",
@@ -878,24 +881,54 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         reply = raw_full_output
         emotion = action = escalation_flag = summary = None
 
-    # Save structured data
+    # Save data DB
     current_milestone = tracker.current().description
-    conv_manager.add_message(
-        session_id,
-        "assistant",
-        reply or reply_text,  # prefer structured field if parsed
-        milestone=current_milestone,
-        behaviour=current_behaviour,
-        escalation=level,
-        models_json=json.dumps({
-            "full_output": raw_full_output,
-            "reply": reply,
-            "emotion": emotion,
-            "action": action,
-            "escalation": escalation_flag,
-            "summary": summary,
-        }),
-    )
+    
+    if not session_hume_talking.get(session_id, False):
+        logger.info("💾 No new Hume activity during generation → saving USER + ASSISTANT messages.")
+
+        # -----------------------------------------------
+        # Save final user message for this turn
+        # (only at the end of LLM streaming)
+        # -----------------------------------------------
+        final_user_msg = session_last_user_input.get(session_id, "")
+        models_json = "{}"  # optional; keep empty or fill if needed
+
+        current_milestone = tracker.current().description
+        current_behaviour = behaviour_level.description
+
+        conv_manager.add_message(
+            session_id,
+            "user",
+            final_user_msg,
+            milestone=current_milestone,
+            behaviour=current_behaviour,
+            escalation=level,
+            models_json=models_json,
+        )
+
+        # -----------------------------------------------
+        # Save assistant reply
+        # -----------------------------------------------
+        conv_manager.add_message(
+            session_id,
+            "assistant",
+            reply or reply_text,
+            milestone=current_milestone,
+            behaviour=current_behaviour,
+            escalation=level,
+            models_json=json.dumps({
+                "full_output": raw_full_output,
+                "reply": reply,
+                "emotion": emotion,
+                "action": action,
+                "escalation": escalation_flag,
+                "summary": summary,
+            }),
+        )
+
+    else:
+        logger.info("⛔ Hume sent new input during generation → DISCARD assistant reply.")
 
     logger.info(f"""💾 Saved assistant reply for [{session_id}: {json.dumps({
             "full_output": raw_full_output,
@@ -905,11 +938,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             "escalation": escalation_flag,
             "summary": summary,
         })}]""")
-    #ZZZ Final SSE was here
-
-
-
-
+    #ZZZ Final SSE 
 
 # =========================================================
 # Endpoints
@@ -943,19 +972,24 @@ async def chat_completions(request: Request, custom_session_id: str = None):
     #     conv_manager.add_message(session_id, m["role"], clean_content)
     if user_messages:
         latest = user_messages[-1]
+
         if latest["role"] == "user":
+            # ----------------------------------------------------
+            # Mark that Hume (the ASR) is actively sending updates.
+            # This means the user's message is not stable yet.
+            # ----------------------------------------------------
+            session_hume_talking[session_id] = True
+            logger.debug(f"🟡 Setting {session_id} to {session_hume_talking[session_id]}")
+            # Clean the partial or full text
             clean_content = strip_emotion_tags(latest["content"])
-            models_json = json.dumps(latest.get("models", {}))  
-            current_milestone = conv_manager.get_tracker(session_id).current().description
-            level = session_escalations.get(session_id, recipe.starting_escalation)
-            current_behaviour = recipe.behaviours.get_level(level).description
-            conv_manager.add_message(
-                session_id, "user", clean_content,
-                models_json=models_json,
-                milestone=current_milestone,
-                behaviour=current_behaviour,
-                escalation=level
-            )
+
+            # Temporarily store the latest version of the message
+            # but DO NOT save it to DB yet.
+            session_last_user_input[session_id] = clean_content
+
+            logger.info(f"📝 Received updated user input for {session_id}: {clean_content}")
+            # IMPORTANT: We do NOT save to DB here anymore.
+
 
 
     return StreamingResponse(
@@ -1023,8 +1057,6 @@ async def get_escalation(escalation: int, session_id: str = None):
         "level": behaviour.level,
         "behaviour": behaviour.description,
     }
-
-
 
 @app.get("/chat/sessions")
 async def list_sessions():
