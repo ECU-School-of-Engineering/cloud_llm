@@ -326,6 +326,21 @@ class ConversationManager:
             for role, content, milestone, behaviour in rows
         ]
 
+    def get_history_rolecontent(self, session_id: str) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT role, content, milestone, behaviour
+            FROM conversations
+            WHERE session_id = ?
+            ORDER BY turn_number ASC
+        """, (session_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {"role": role, "content": content}
+            for role, content, milestone, behaviour in rows
+        ]
 
     def get_tracker(self, session_id: str) -> "MilestoneTracker":
         return self.trackers.get(session_id)
@@ -665,8 +680,11 @@ logger.info(f"🧩 Service config loaded: {SERVICE_CFG}")
 
 session_recipes = {}  
 session_escalations: Dict[str, int] = {}
-session_hume_talking = {}      # True while Hume/ASR is still sending updates
-session_last_user_input = {}   # Holds the last FULL version of the user message
+session_hume_talking = {}      
+session_last_user_input = {}
+session_latest_partial = {}    # key: (session_id, phrase_id) → latest end value
+session_active_generation = {}  # key: session_id → (phrase_id, partial_id)
+
 # =========================================================
 # ConversationManager Manager
 # =========================================================
@@ -713,8 +731,23 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     DONE = object()
     REPY_DONE = object()
 
-    history = conv_manager.get_history(session_id)
+    history = conv_manager.get_history_rolecontent(session_id)
     logger.info(f"\tHistory: {history}")
+
+    # NEW — Capture generation ID at start of LLM
+    active_phrase_id = None
+    active_partial_id = None
+
+    # Determine the active generation ID
+    # last ASR update governs the generation
+    if session_id in session_active_generation:
+        active_phrase_id, active_partial_id = session_active_generation[session_id]
+    else:
+        # No ASR input? create a dummy phrase_id
+        active_phrase_id = 0
+        active_partial_id = 0
+
+    logger.info(f"🎬 Starting LLM generation with ID ({active_phrase_id}, {active_partial_id})")
 
     # 🔑 Load recipe + context
     recipe = session_recipes[session_id]
@@ -756,6 +789,13 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             last_flush = time.time()
 
             for text_delta in backend.stream(messages, max_tokens=400, stop=None):
+
+                # NEW: Check if this generation is now obsolete
+                latest = session_latest_partial.get((session_id, active_phrase_id), None)
+                if latest is not None and latest != active_partial_id:
+                    logger.info(f"⛔ CANCEL LLM: new ASR partial {latest} replaced old {active_partial_id}")
+                    break  # ← Cancels generation immediately
+
                 full_json_text.append(text_delta)
                 buffer += text_delta
 
@@ -884,7 +924,10 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     # Save data DB
     current_milestone = tracker.current().description
     
-    if not session_hume_talking.get(session_id, False):
+    # Save only if ASR did NOT override this generation
+    latest = session_latest_partial.get((session_id, active_phrase_id), active_partial_id)
+    if latest == active_partial_id:
+
         logger.info("💾 No new Hume activity during generation → saving USER + ASSISTANT messages.")
 
         # -----------------------------------------------
@@ -971,26 +1014,31 @@ async def chat_completions(request: Request, custom_session_id: str = None):
     #     clean_content = strip_emotion_tags(m["content"])
     #     conv_manager.add_message(session_id, m["role"], clean_content)
     if user_messages:
-        latest = user_messages[-1]
+        # Iterate over ALL messages in the packet
+        for msg in user_messages:
 
-        if latest["role"] == "user":
-            # ----------------------------------------------------
-            # Mark that Hume (the ASR) is actively sending updates.
-            # This means the user's message is not stable yet.
-            # ----------------------------------------------------
-            session_hume_talking[session_id] = True
-            logger.debug(f"🟡 Setting {session_id} to {session_hume_talking[session_id]}")
-            # Clean the partial or full text
-            clean_content = strip_emotion_tags(latest["content"])
+            # Only consider USER messages that come from ASR
+            if msg.get("role") == "user" and msg.get("time"):
+                begin = msg["time"]["begin"]
+                end = msg["time"]["end"]
 
-            # Temporarily store the latest version of the message
-            # but DO NOT save it to DB yet.
-            session_last_user_input[session_id] = clean_content
+                phrase_id = begin
+                partial_id = end
 
-            logger.info(f"📝 Received updated user input for {session_id}: {clean_content}")
-            # IMPORTANT: We do NOT save to DB here anymore.
+                # Mark ASR as active
+                session_hume_talking[session_id] = True
 
+                # Clean content
+                clean_content = strip_emotion_tags(msg["content"])
+                session_last_user_input[session_id] = clean_content
 
+                # Track latest partial for this phrase
+                session_latest_partial[(session_id, phrase_id)] = partial_id
+
+                # This ASR update overrides previous LLM generation
+                session_active_generation[session_id] = (phrase_id, partial_id)
+
+                logger.info(f"📝 Updated ASR phrase={phrase_id} partial={partial_id} for session={session_id}")
 
     return StreamingResponse(
         sse_stream(session_id, request, backend),
