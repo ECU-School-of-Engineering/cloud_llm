@@ -185,7 +185,7 @@ class MilestoneTracker:
 
         # 🔹 Rule 2: Stay at milestone 4 or 5
         elif self.current().order in (4, 5):
-            logger.info("🛑 Staying on current milestone (4 or 5, no progression rule)")
+            logger.info("🛑 go to milestone = END")
             next_index = self.index
 
         # Apply update
