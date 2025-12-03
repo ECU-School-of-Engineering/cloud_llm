@@ -858,7 +858,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                 if not seen_emotion_tag:
                     now = time.time()
                     pending = buffer[last_sent_idx:]
-                    if len(pending) >= FLUSH_CHARS or (now - last_flush) > FLUSH_DELAY:
+                    if pending:
                         if pending.strip():
                             asyncio.run_coroutine_threadsafe(q.put(pending), loop)
                             reply_text_stream.append(pending)
