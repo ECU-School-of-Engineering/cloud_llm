@@ -49,6 +49,8 @@ milestones:
         milestone: "Violence - Threaten to strike the nurse in anger"
       - order: 5
         milestone: " Calm down - You begin to calm down and begrudgingly accept that you need to wait and the hospital has to a process to follow. You become a bit more agreeable and understanding with the nurse's requests and questions. You do not use threatening or demeaning language, but do maintain a wary demeanor."
+      - order: 6
+        milestone: "END"  
       
   - id: school_path
     steps:
@@ -90,4 +92,4 @@ recipes:
 service_config:
   flush_chars: 100      # number of characters to accumulate before flush
   flush_delay: 0.25     # max seconds between flushes
-  stream_log_level: info
+  stream_log_level: debug
