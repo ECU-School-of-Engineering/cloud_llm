@@ -1,7 +1,7 @@
 import sqlite3
 import json
 
-DB_PATH = "conversations (8th copy).db"
+DB_PATH = "conversations (10th copy).db"
 
 def ensure_messages_table(conn):
     """
