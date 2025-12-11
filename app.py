@@ -744,6 +744,28 @@ app.add_middleware(
 
 last_session_id = None
 
+### Censored
+import re
+profanity = ["fuck", "fucked", "fucker","dumbfuck","bitch", "shit", "cunt", "ass", "bullshit", "biatch", "motherfucker", "asshole", "whore", "goddamn", "bastard", "shitfuck", "dickhead", "cockhead", "prick"]
+
+profanity_ing = ["fuckin", "fuckin'", "fucking", "motherfucking", "shitting", "shittin"]
+# Regex + puntuation
+pattern = re.compile(
+    r'(?<!\w)(' + '|'.join(map(re.escape, profanity + profanity_ing)) + r')(?!\w)',
+    flags=re.IGNORECASE | re.UNICODE
+)
+
+def censor(text: str) -> str:
+    def repl(match):
+        word = match.group(1).lower()
+
+        if word in profanity_ing:
+            return "BEEPING"
+        else:
+            return "BEEP"
+    return pattern.sub(repl, text)
+# Censored
+
 # =========================================================
 # SSE streaming bridge
 # =========================================================
@@ -816,7 +838,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             FLUSH_CHARS = SERVICE_CFG["flush_chars"]
             FLUSH_DELAY = SERVICE_CFG["flush_delay"]
 
-            last_flush = time.time()
+            # last_flush = time.time()
 
             for text_delta in backend.stream(messages, max_tokens=400, stop=None):
 
@@ -825,7 +847,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                 if latest is not None and latest != active_partial_id:
                     logger.info(f"⛔ CANCEL LLM: new ASR partial {latest} replaced old {active_partial_id}")
                     break  # ← Cancels generation immediately
-
+                
                 full_json_text.append(text_delta)
                 buffer += text_delta
 
@@ -847,7 +869,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                         # only send up to cutoff, excluding the tag itself
                         new_text = buffer[last_sent_idx:cutoff]
                         if new_text.strip():
-                            asyncio.run_coroutine_threadsafe(q.put(new_text), loop)
+                            asyncio.run_coroutine_threadsafe(censor(q.put(new_text)), loop)
                         seen_emotion_tag = True
                         logger.debug("🟡 Stopped streaming before 'emotion' tag")
                         # ⚠️ DO NOT break — keep reading to capture full JSON
@@ -860,16 +882,17 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                     pending = buffer[last_sent_idx:]
                     if pending:
                         if pending.strip():
-                            asyncio.run_coroutine_threadsafe(q.put(pending), loop)
-                            reply_text_stream.append(pending)
+                            clean = censor(pending)
+                            asyncio.run_coroutine_threadsafe(q.put(clean), loop)
+                            reply_text_stream.append(clean)
                         last_sent_idx = len(buffer)
-                        last_flush = now
+                        # last_flush = now
 
             # ---- flush any remainder of reply text (if emotion never appeared) ----
             if seen_reply_tag and not seen_emotion_tag and last_sent_idx < len(buffer):
                 remainder = buffer[last_sent_idx:]
                 if remainder.strip():
-                    asyncio.run_coroutine_threadsafe(q.put(remainder), loop)
+                    asyncio.run_coroutine_threadsafe(q.put(censor(remainder)), loop)
 
             # ✅ Full JSON is now complete
             logger.info(f"💬 Full JSON completed")
