@@ -81,7 +81,7 @@ recipes:
     role: barry
     milestones: hospital_path
     behaviour_levels: Barry
-    starting_escalation: 3
+    starting_escalation: 2
 
   - id: classroom_test
     role: maddy
