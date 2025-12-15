@@ -43,8 +43,10 @@ recipe_json
 
 
 
+/////
+Sessions > 15:
+//////
 
-Sessions > 15
 SELECT 
     s.session_id,
     s.created_at
@@ -56,3 +58,24 @@ JOIN (
     HAVING MAX(turn_number) > 15
 ) c ON s.session_id = c.session_id
 ORDER BY s.created_at;
+
+
+//////
+conversations + session
+//////
+SELECT
+    c.session_id,
+    c.turn_number,
+    c.role,
+    c.content,
+    c.models_json,
+    c.milestone,
+    c.behaviour,
+    c.escalation,
+    s.recipe_id,
+    s.created_at AS session_created_at,
+    s.recipe_json
+FROM conversations c
+LEFT JOIN sessions s
+    ON c.session_id = s.session_id
+ORDER BY c.session_id, c.turn_number;
