@@ -3,8 +3,28 @@ import json
 import sys
 import uuid
 
-API_URL = "http://localhost:8080/chat/completions"
-NEW_SESSION_URL = "http://localhost:8080/chat/new_session"
+API_URL = "http://localhost:8000/chat/completions"
+NEW_SESSION_URL = "http://localhost:8000/chat/new_session"
+
+
+MODELS_TEMPLATE = {
+    "prosody": {
+        "scores": {
+            "Calmness": 0.6,
+            "Boredom": 0.3,
+            "Sadness": 0.1,
+            "Anger": 0.05,
+            "Interest": 0.2,
+            "Guilt": 0.1,
+            "Sympathy": 0.15
+        }
+    }
+}
+
+def fake_time():
+    start = uuid.uuid4().int % 10000
+    return {"begin": start, "end": start + 1500}
+
 
 NURSE_PHRASES = [
     "What brings you in today?",
@@ -22,7 +42,18 @@ NURSE_PHRASES = [
 session_id = str(uuid.uuid4())
 
 def send_message(message):
-    payload = {"session_id": session_id, "messages": [{"role": "user", "content": message}]}
+    payload = {
+        "session_id": session_id,
+        "messages": [
+            {
+                "role": "user",
+                "content": message,
+                "models": MODELS_TEMPLATE,
+                "time": fake_time()
+            }
+        ]
+    }
+
     result = subprocess.run(
         ["curl", "-sN", API_URL, "-H", "Content-Type: application/json", "-d", json.dumps(payload)],
         capture_output=True, text=True
