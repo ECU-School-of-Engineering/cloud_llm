@@ -97,6 +97,7 @@ class ConfigLoader:
             "flush_delay": float(self.service_config.get("flush_delay", 0.05)),
             "max_tokens": int(self.service_config.get("max_tokens", 400)),
             "stream_log_level": self.service_config.get("stream_log_level", "info"),
+            "uncensored": int(self.service_config.get("uncensored", 1)),
         }
 
     def get_default_recipe_id(self) -> str:
@@ -640,7 +641,7 @@ def reload_config():
     """
     Reload the YAML configuration and update all dependent globals.
     """
-    global loader, SERVICE_CFG, session_recipes
+    global loader, SERVICE_CFG, session_recipes, uncensored
 
     logger.info("🔄 Reloading configuration from scenarios.yml...")
     loader = ConfigLoader("scenarios.yml")
@@ -656,10 +657,13 @@ def reload_config():
     session_recipes = updated_recipes
 
     # Update log level
-    numeric_level = getattr(logging, SERVICE_CFG["log_level"].upper(), logging.INFO)
+    numeric_level = getattr(logging, SERVICE_CFG["stream_log_level"].upper(), logging.INFO)
     logging.getLogger().setLevel(numeric_level)
     logger.setLevel(numeric_level)
 
+    # Update censorship:
+    uncensored=SERVICE_CFG["uncensored"]
+    
     logger.info(f"✅ Configuration reloaded successfully with service_config={SERVICE_CFG}")
     return {
         "status": "ok",
@@ -708,7 +712,7 @@ session_last_user_input = {}
 session_last_user_models = {}
 session_latest_partial = {}    # key: (session_id, phrase_id) → latest end value
 session_active_generation = {}  # key: session_id → (phrase_id, partial_id)
-
+uncensored=SERVICE_CFG["uncensored"]
 # =========================================================
 # ConversationManager Manager
 # =========================================================
@@ -746,6 +750,7 @@ last_session_id = None
 
 ### Censored
 import re
+
 profanity = ["fuck", "fucked", "fucker","dumbfuck","bitch", "shit", "cunt", "ass", "bullshit", "biatch", "motherfucker", "asshole", "whore", "goddamn", "bastard", "shitfuck", "dickhead", "cockhead", "prick"]
 
 profanity_ing = ["fuckin", "fuckin'", "fucking", "motherfucking", "shitting", "shittin"]
@@ -869,7 +874,8 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                         # only send up to cutoff, excluding the tag itself
                         new_text = buffer[last_sent_idx:cutoff]
                         if new_text.strip():
-                            asyncio.run_coroutine_threadsafe(censor(q.put(new_text)), loop)
+                            content = new_text if uncensored == 1 else censor(new_text)
+                            asyncio.run_coroutine_threadsafe(q.put(content), loop)
                         seen_emotion_tag = True
                         logger.debug("🟡 Stopped streaming before 'emotion' tag")
                         # ⚠️ DO NOT break — keep reading to capture full JSON
@@ -882,9 +888,9 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
                     pending = buffer[last_sent_idx:]
                     if pending:
                         if pending.strip():
-                            clean = censor(pending)
-                            asyncio.run_coroutine_threadsafe(q.put(clean), loop)
-                            reply_text_stream.append(clean)
+                            content = pending if uncensored == 1 else censor(pending)
+                            asyncio.run_coroutine_threadsafe(q.put(content), loop)
+                            reply_text_stream.append(content)
                         last_sent_idx = len(buffer)
                         # last_flush = now
 
@@ -892,7 +898,8 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             if seen_reply_tag and not seen_emotion_tag and last_sent_idx < len(buffer):
                 remainder = buffer[last_sent_idx:]
                 if remainder.strip():
-                    asyncio.run_coroutine_threadsafe(q.put(censor(remainder)), loop)
+                    content = remainder if uncensored == 1 else censor(remainder)
+                    asyncio.run_coroutine_threadsafe(q.put(content), loop)
 
             # ✅ Full JSON is now complete
             logger.info(f"💬 Full JSON completed")

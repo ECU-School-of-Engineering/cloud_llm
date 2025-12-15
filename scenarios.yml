@@ -93,3 +93,4 @@ service_config:
   flush_chars: 100      # number of characters to accumulate before flush
   flush_delay: 0.25     # max seconds between flushes
   stream_log_level: debug
+  uncensored: 1
