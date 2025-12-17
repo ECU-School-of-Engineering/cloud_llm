@@ -94,3 +94,5 @@ service_config:
   flush_delay: 0.25     # max seconds between flushes
   stream_log_level: debug
   uncensored: 1
+  escalation_penalty: 5    # scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
+  descalation_penalty: 0.5

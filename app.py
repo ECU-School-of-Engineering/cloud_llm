@@ -100,6 +100,8 @@ class ConfigLoader:
             "max_tokens": int(self.service_config.get("max_tokens", 400)),
             "stream_log_level": self.service_config.get("stream_log_level", "info"),
             "uncensored": int(self.service_config.get("uncensored", 1)),
+            "escalation_penalty": float(self.service_config.get("escalation_penalty", 1)),
+            "descalation_penalty": float(self.service_config.get("descalation_penalty", 1)),
         }
 
     def get_default_recipe_id(self) -> str:
@@ -227,7 +229,7 @@ class ConversationManager:
             models_json TEXT,
             milestone TEXT,
             behaviour TEXT,
-            escalation INTEGER,
+            escalation REAL,
             PRIMARY KEY (session_id, turn_number)
         )
         """)
@@ -291,7 +293,7 @@ class ConversationManager:
             logger.info(f"🧾 Logged session {session_id} ({recipe.id}) with recipe details at {timestamp}")
 
     def add_message(self, session_id: str, role: str, content: str,
-                models_json: str = None, milestone: str = None, behaviour: str = None, escalation: int = None):
+                models_json: str = None, milestone: str = None, behaviour: str = None, escalation: float = None):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -301,12 +303,12 @@ class ConversationManager:
         )
         last_turn = cursor.fetchone()[0]
         next_turn = last_turn + 1
-
+        escalation_rounded = round(float(escalation), 2)
         cursor.execute(
             """INSERT INTO conversations
             (session_id, turn_number, role, content, models_json, milestone, behaviour, escalation)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, next_turn, role, content, models_json, milestone, behaviour, escalation)
+            (session_id, next_turn, role, content, models_json, milestone, behaviour, escalation_rounded)
 )
 
         conn.commit()
@@ -366,6 +368,7 @@ def create_session(session_id: str= None, recipe_id: str = None) -> dict:
     recipe = loader.get_recipe(recipe_id)
     behaviour_level = recipe.behaviours.get_level(recipe.starting_escalation)
     session_escalation_level[session_id] = recipe.starting_escalation
+    session_escalation_int[session_id] = int(recipe.starting_escalation)
     tracker = MilestoneTracker(recipe.milestones, turns_per_milestone=loader.get_default_turns_per_milestone())
 
     conv_manager.set_tracker(session_id, tracker)
@@ -382,7 +385,7 @@ def create_session(session_id: str= None, recipe_id: str = None) -> dict:
     logger.info("🚩 Milestones: " + ", ".join(m.description for m in recipe.milestones))
     logger.info("⚙️ Behaviours: " + ", ".join(f"{l.level}:{l.description}" for l in recipe.behaviours.levels))
     current_level = recipe.starting_escalation
-    current_behaviour = recipe.behaviours.get_level(current_level).description
+    current_behaviour = recipe.behaviours.get_level(session_escalation_int[session_id]).description
     return {
         "status": "ok",
         "session_id": session_id,
@@ -643,7 +646,7 @@ def reload_config():
     """
     Reload the YAML configuration and update all dependent globals.
     """
-    global loader, SERVICE_CFG, session_recipes, uncensored
+    global loader, SERVICE_CFG, session_recipes, uncensored, escalation_penalty, descalation_penalty
 
     logger.info("🔄 Reloading configuration from scenarios.yml...")
     loader = ConfigLoader("scenarios.yml")
@@ -663,8 +666,10 @@ def reload_config():
     logging.getLogger().setLevel(numeric_level)
     logger.setLevel(numeric_level)
 
-    # Update censorship:
+    # Update censorship and globals
     uncensored=SERVICE_CFG["uncensored"]
+    escalation_penalty=SERVICE_CFG["escalation_penalty"]
+    descalation_penalty=SERVICE_CFG["descalation_penalty"]
     
     logger.info(f"✅ Configuration reloaded successfully with service_config={SERVICE_CFG}")
     return {
@@ -709,12 +714,15 @@ logger.info(f"🧩 Service config loaded: {SERVICE_CFG}")
 
 session_recipes = {}  
 session_escalation_level: Dict[str, float] = {}
+session_escalation_int: Dict[str,int] ={}
 session_hume_talking = {}      
 session_last_user_input = {}
 session_last_user_models = {}
 session_latest_partial = {}    # key: (session_id, phrase_id) → latest end value
 session_active_generation = {}  # key: session_id → (phrase_id, partial_id)
 uncensored=SERVICE_CFG["uncensored"]
+escalation_penalty=SERVICE_CFG["escalation_penalty"]
+descalation_penalty=SERVICE_CFG["descalation_penalty"]
 scorer_eval = EscalationScorer()
 
 # =========================================================
@@ -751,6 +759,33 @@ app.add_middleware(
 )
 
 last_session_id = None
+
+### Escalation utils ### : Histeresis or other function, sets min and max hardcoded between 1 and 3
+def escalation_hysteresis(
+    prev_level: int,
+    level_float: float,
+) -> int:
+    # if prev_level == 1:
+    #     if level_float >= 2:
+    #         return 2
+    #     return 1
+
+    # if prev_level == 2:
+    #     if level_float < 1:
+    #         return 1
+    #     if level_float >= 3:
+    #         return 3
+    #     return 2
+
+    # if prev_level == 3:
+    #     if level_float < 2:
+    #         return 2
+    #     return 3
+    
+    prev_level = max(1, min(int(round(level_float,0)), 3))
+    return prev_level
+
+### Escalation utils ###
 
 ### Censored
 import re
@@ -814,8 +849,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     current_nurse_msg = session_last_user_input.get(session_id, "")
     # 🔮 Behaviour scoring 
     level = session_escalation_level.get(session_id, float(recipe.starting_escalation))   #current level fall_back
-    behaviour_level = recipe.behaviours.get_level(math.floor(level))
-    
+        
     models_raw = session_last_user_models.get(session_id)
     emotions = {}
 
@@ -826,20 +860,24 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         except json.JSONDecodeError:
             logger.warning("⚠️ Failed to parse Hume models JSON")
 
-    # Call your scorer
+    # Call scorer
     my_scorer = scorer_eval.score_interaction(
         text=current_nurse_msg,
         hume_data=emotions
     )
     scorer = my_scorer.get("raw_score")
-    # 🔥 Update session escalation / behaviour
+    # Update session escalation / behaviour otherwise falls to previous
     if scorer is not None:
-        accu= session_escalation_level[session_id] + scorer
-        session_escalation_level[session_id] = accu
-        behaviour_level = recipe.behaviours.get_level(math.floor(accu))
+        print(f"🎭scorer:{scorer}")
+        scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
+        print(f"🎭scorer:{scorer}")
+        session_escalation_level[session_id]= session_escalation_level[session_id] + scorer
+        session_escalation_int[session_id] = escalation_hysteresis(session_escalation_int[session_id], session_escalation_level[session_id]) 
+    
+    behaviour_level = recipe.behaviours.get_level(session_escalation_int[session_id])
 
     logger.info(
-        f"🎭 Behaviour updated via scorer → level={session_escalation_level[session_id]}: {behaviour_level.description}"
+        f"🎭 Behaviour updated via scorer → level={session_escalation_level[session_id]:.2f} - Int: level={session_escalation_int[session_id]}: {behaviour_level.description}"
     )
     # 🔮 Behaviour scoring 
 
@@ -1178,7 +1216,7 @@ async def get_escalation(escalation: int, session_id: str = None):
     recipe = loader.get_recipe(recipe_id)
 
     level = float(escalation)
-    behaviour = recipe.behaviours.get_level(level)
+    behaviour = recipe.behaviours.get_level(session_escalation_int[session_id])
 
     # ✅ Case 1: No session_id provided → create a new one
     if not session_id:
@@ -1220,8 +1258,8 @@ async def get_chat_status(session_id: str):
 
     # Get recipe and escalation
     recipe = session_recipes[session_id]
-    escalation = session_escalation_level.get(session_id, recipe.starting_escalation)
-    behaviour = recipe.behaviours.get_level(escalation)
+    escalation = round(session_escalation_level[session_id],2)
+    behaviour = recipe.behaviours.get_level(session_escalation_int[session_id])
 
     # Get milestone tracker
     tracker = conv_manager.get_or_create_tracker(session_id, recipe)
@@ -1230,6 +1268,7 @@ async def get_chat_status(session_id: str):
     return {
         "session_id": session_id,
         "escalation_level": escalation,
+        "escalation_int": session_escalation_int[session_id],
         "behaviour_description": behaviour.description,
         "current_milestone": current_milestone,
     }
