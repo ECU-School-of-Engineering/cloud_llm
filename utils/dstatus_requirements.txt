@@ -1,0 +1,11 @@
+# Core API framework
+fastapi>=0.110.0
+
+# ASGI server
+uvicorn[standard]>=0.27.0
+
+# Data validation / typing (FastAPI dependency, but pinned for clarity)
+pydantic>=2.6.0
+
+# Optional: environment variable support
+python-dotenv>=1.0.1
