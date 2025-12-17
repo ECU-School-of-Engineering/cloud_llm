@@ -161,7 +161,7 @@ class MilestoneTracker:
 
     def record_turn(self):
         self.turn_counter += 1
-        logger.debug(f"⚠️ counter = {self.turn_counter}")
+        logger.debug(f"Milestone Tracker ⚠️ counter = {self.turn_counter}")
 
     def should_advance(self) -> bool:
         return self.turn_counter >= self.turns_per_milestone and self.index < len(self.milestones) - 1
@@ -1187,11 +1187,11 @@ async def chat_completions(request: Request, custom_session_id: str = None):
 
 @app.post("/chat/new_session")
 async def new_session(recipe_id: str = None):
-    return create_session(recipe_id)
+    return create_session(recipe_id=recipe_id)
 
 @app.get("/chat/new_session")
 async def new_session_get(recipe_id: str = None):
-    return create_session(recipe_id)
+    return create_session(recipe_id=recipe_id)
 
 
 
