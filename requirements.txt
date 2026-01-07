@@ -45,8 +45,11 @@ pytz>=2025.2
 tzdata>=2025.3
 
 # --- Graph / Math helpers ---
-networkx>=3.5,<4.0
+networkx==3.4.2
 mpmath>=1.3,<1.4
 
 # --- Your internal package ---
-git+https://github.com/ECU-School-of-Engineering/escalation_scoring
+git+https://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:x-oauth-basic@github.com/ECU-School-of-Engineering/escalation_scoring.git
+
+# git+https://github.com/ECU-School-of-Engineering/escalation_scoring
+#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

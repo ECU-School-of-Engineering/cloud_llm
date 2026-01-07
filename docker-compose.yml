@@ -6,17 +6,20 @@ services:
       context: .
       args:
         HF_TOKEN: ${HF_TOKEN}        # Se pasará desde .env
-#    ports:
-#      - "8000:8000"
-    network_mode: host
-    runtime: nvidia
-    devices:
-      - /dev/nvidia0                 # Acceso directo al GPU (puedes usar "all")
+    ports:
+      - "8080:8080"
+    # network_mode: host
+    # runtime: nvidia
+    gpus: all
+    # devices:
+    #   - /dev/nvidia0                 # Acceso directo al GPU (puedes usar "all")
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
       - ./models:/app/models
+      - ./database:/app/database
+      - ./scenarios.yml:/app/scenarios.yml:ro 
     # command: bash                    # Inicia en modo interactivo
     stdin_open: true
     tty: true
