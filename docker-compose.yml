@@ -7,7 +7,7 @@ services:
       args:
         HF_TOKEN: ${HF_TOKEN}        # Se pasará desde .env
     ports:
-      - "8080:8080"
+      - "8080:80"
     # network_mode: host
     # runtime: nvidia
     gpus: all
@@ -16,6 +16,9 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      - HF_HOME=/app/models                      #  Point to mounted models dir
+      - TRANSFORMERS_CACHE=/app/models           #  Transformers cache
+      - HF_HUB_CACHE=/app/models/hub             #  Specific hub cache location
     volumes:
       - ./models:/app/models
       - ./database:/app/database
