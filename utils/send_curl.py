@@ -81,7 +81,17 @@ def send_message(message):
 
 def new_session():
     global session_id
-    result = subprocess.run(["curl", "-s", NEW_SESSION_URL], capture_output=True, text=True)
+    result = subprocess.run(
+        [
+            "curl",
+            "-s",
+            "-X", "POST",
+            f"{NEW_SESSION_URL}?recipe_id=barry_hospital"
+        ],
+        capture_output=True,
+        text=True,
+    )
+
     data = json.loads(result.stdout)
     session_id = data["session_id"]
     print(f"\n🆕 New session started: {session_id}\n")
