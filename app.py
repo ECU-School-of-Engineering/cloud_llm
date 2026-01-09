@@ -73,12 +73,13 @@ class Milestone:
 
 
 class Recipe:
-    def __init__(self, id: str, role: Role, behaviours: BehaviourSet, milestones: List[Milestone], starting_escalation: int = 1):
+    def __init__(self, id: str, role: Role, behaviours: BehaviourSet, milestones: List[Milestone], starting_escalation: int = 1,  milestones_id: str = None,):
         self.id = id
         self.role = role
         self.behaviours = behaviours
         self.milestones = milestones
         self.starting_escalation = starting_escalation
+        self.milestones_id = milestones_id
 
 ## Confing Loader classes ###
 #----------------------------------------------#
@@ -106,9 +107,14 @@ class ConfigLoader:
 
     def get_milestone_rules(self, rule_id: str):
         rules_block = next(
-            r for r in self.config["milestone_rules"]
-            if r["id"] == rule_id
+            (r for r in self.config.get("milestone_rules", [])
+            if r["id"] == rule_id),
+            None
         )
+
+        if not rules_block:
+            logger.warning(f"⚠️ No milestone_rules found for id='{rule_id}'")
+            return []
 
         rules = []
         for r in rules_block["rules"]:
@@ -154,13 +160,15 @@ class ConfigLoader:
         # Resolve milestones
         milestones_data = next(m for m in self.config["milestones"] if m["id"] == recipe_data["milestones"])
         milestones = [Milestone(s["order"], s["milestone"]) for s in milestones_data["steps"]]
-
+        
+        milestones_id = recipe_data["milestones"]
         return Recipe(
             id=recipe_data["id"],
             role=role,
             behaviours=behaviour_set,
             milestones=milestones,
-            starting_escalation=starting_escalation
+            starting_escalation=starting_escalation,
+            milestones_id=milestones_id,
         )
 
 
@@ -960,7 +968,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     tracker.record_turn()
 
     # 🔁 FSM rule evaluation
-    rules = loader.get_milestone_rules(recipe.id)
+    rules = loader.get_milestone_rules(recipe.milestones_id)
     engine = MilestoneRuleEngine(rules)
 
     rule = engine.evaluate(
@@ -972,7 +980,10 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     if rule:
         tracker.jump_to_order(rule.next)
 
-
+    logger.info(
+        f"📍 Current milestone → order={tracker.current().order} "
+        f"('{tracker.current().description}')"
+    )
     
     messages = prompt_manager.build_messages(
         history,

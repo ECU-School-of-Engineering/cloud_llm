@@ -159,7 +159,7 @@ recipes:
 service_config:
   flush_chars: 100      # number of characters to accumulate before flush
   flush_delay: 0.25     # max seconds between flushes
-  stream_log_level: debug
+  stream_log_level: info
   uncensored: 1
   escalation_penalty: 1    # scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
   descalation_penalty: 1
