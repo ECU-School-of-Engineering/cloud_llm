@@ -958,8 +958,20 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     tracker = conv_manager.get_or_create_tracker(session_id, recipe)
     tracker.record_turn()
-    if tracker.should_advance():
-        tracker.advance(level)
+
+    # 🔁 FSM rule evaluation
+    rules = loader.get_milestone_rules(recipe.id)
+    engine = MilestoneRuleEngine(rules)
+
+    rule = engine.evaluate(
+        current=tracker.current().order,
+        turns=tracker.turn_counter,
+        escalation=session_escalation_int[session_id],
+    )
+
+    if rule:
+        tracker.jump_to_order(rule.next)
+
 
     
     messages = prompt_manager.build_messages(
