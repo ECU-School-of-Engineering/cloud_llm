@@ -73,12 +73,13 @@ class Milestone:
 
 
 class Recipe:
-    def __init__(self, id: str, role: Role, behaviours: BehaviourSet, milestones: List[Milestone], starting_escalation: int = 1):
+    def __init__(self, id: str, role: Role, behaviours: BehaviourSet, milestones: List[Milestone], starting_escalation: int = 1,  milestones_id: str = None,):
         self.id = id
         self.role = role
         self.behaviours = behaviours
         self.milestones = milestones
         self.starting_escalation = starting_escalation
+        self.milestones_id = milestones_id
 
 ## Confing Loader classes ###
 #----------------------------------------------#
@@ -103,6 +104,29 @@ class ConfigLoader:
             "escalation_penalty": float(self.service_config.get("escalation_penalty", 1)),
             "descalation_penalty": float(self.service_config.get("descalation_penalty", 1)),
         }
+
+    def get_milestone_rules(self, rule_id: str):
+        rules_block = next(
+            (r for r in self.config.get("milestone_rules", [])
+            if r["id"] == rule_id),
+            None
+        )
+
+        if not rules_block:
+            logger.warning(f"⚠️ No milestone_rules found for id='{rule_id}'")
+            return []
+
+        rules = []
+        for r in rules_block["rules"]:
+            rules.append(
+                MilestoneRule(
+                    current=r.get("current", "any"),
+                    min_turns=int(r.get("min_turns", 0)),
+                    min_escalation=r.get("min_escalation"),
+                    next_milestone=int(r["next"]),
+                )
+            )
+        return rules
 
     def get_default_recipe_id(self) -> str:
         return self.defaults.get("recipe_id")
@@ -136,13 +160,15 @@ class ConfigLoader:
         # Resolve milestones
         milestones_data = next(m for m in self.config["milestones"] if m["id"] == recipe_data["milestones"])
         milestones = [Milestone(s["order"], s["milestone"]) for s in milestones_data["steps"]]
-
+        
+        milestones_id = recipe_data["milestones"]
         return Recipe(
             id=recipe_data["id"],
             role=role,
             behaviours=behaviour_set,
             milestones=milestones,
-            starting_escalation=starting_escalation
+            starting_escalation=starting_escalation,
+            milestones_id=milestones_id,
         )
 
 
@@ -162,6 +188,15 @@ class MilestoneTracker:
     def record_turn(self):
         self.turn_counter += 1
         logger.debug(f"Milestone Tracker ⚠️ counter = {self.turn_counter}")
+
+    def jump_to_order(self, order: int):
+        for i, m in enumerate(self.milestones):
+            if m.order == order:
+                logger.info(f"🚀 Milestone jump {self.current().order} → {order}")
+                self.index = i
+                self.turn_counter = 0
+                return
+        logger.warning(f"⚠️ Milestone order {order} not found; staying put")
 
     def should_advance(self) -> bool:
         return self.turn_counter >= self.turns_per_milestone and self.index < len(self.milestones) - 1
@@ -203,6 +238,49 @@ class MilestoneTracker:
         logger.info(f"✅ END advance | new.order={self.current().order}, index={self.index}, behaviour={behaviour_level}")
 
 
+#### Rules tracker ###
+# =========================================================
+# Milestone Rule Engine
+# =========================================================
+
+class MilestoneRule:
+    def __init__(
+        self,
+        current,
+        min_turns,
+        next_milestone,
+        min_escalation=None,
+    ):
+        self.current = current            # int or "any"
+        self.min_turns = min_turns        # int
+        self.min_escalation = min_escalation  # int | None
+        self.next = next_milestone        # int
+
+    def matches(self, current, turns, escalation):
+        if self.current != "any" and self.current != current:
+            return False
+        if self.min_escalation is not None and escalation < self.min_escalation:
+            return False
+        if turns < self.min_turns:
+            return False
+        return True
+
+
+class MilestoneRuleEngine:
+    def __init__(self, rules):
+        self.rules = rules  # priority order
+
+    def evaluate(self, current, turns, escalation):
+        for rule in self.rules:
+            if rule.matches(current, turns, escalation):
+                logger.info(
+                    f"🧭 FSM rule matched: "
+                    f"current={current}, turns={turns}, escalation={escalation} → {rule.next}"
+                )
+                return rule
+        return None
+
+
 
 # =========================================================
 # Conversation Manager: handles history persistence
@@ -213,6 +291,9 @@ class ConversationManager:
         self.db_path = db_path
         self._init_db()
         self.trackers = {}
+        self.recipes = {}                
+        self.escalation_level = {}       
+        self.escalation_int = {}         
 
     def _init_db(self):
         """Create tables if they don't exist"""
@@ -885,9 +966,24 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     tracker = conv_manager.get_or_create_tracker(session_id, recipe)
     tracker.record_turn()
-    if tracker.should_advance():
-        tracker.advance(level)
 
+    # 🔁 FSM rule evaluation
+    rules = loader.get_milestone_rules(recipe.milestones_id)
+    engine = MilestoneRuleEngine(rules)
+
+    rule = engine.evaluate(
+        current=tracker.current().order,
+        turns=tracker.turn_counter,
+        escalation=session_escalation_int[session_id],
+    )
+
+    if rule:
+        tracker.jump_to_order(rule.next)
+
+    logger.info(
+        f"📍 Current milestone → order={tracker.current().order} "
+        f"('{tracker.current().description}')"
+    )
     
     messages = prompt_manager.build_messages(
         history,
@@ -1184,7 +1280,7 @@ async def chat_completions(request: Request, custom_session_id: str = None):
     )
 
 
-
+# POST /chat/new_session?recipe_id=barry_hospital
 @app.post("/chat/new_session")
 async def new_session(recipe_id: str = None):
     return create_session(recipe_id=recipe_id)
