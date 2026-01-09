@@ -79,3 +79,28 @@ FROM conversations c
 LEFT JOIN sessions s
     ON c.session_id = s.session_id
 ORDER BY c.session_id, c.turn_number;
+
+
+
+
+DD - Getting LLM feedback:
+
+SELECT comment, content
+FROM feedback_messages
+WHERE comment IS NOT NULL
+  AND comment <> ''
+  AND comment NOT LIKE '%realistic%'
+  AND role="assistant"
+
+CJ - Nurse text classifier
+
+SELECT
+    c.*,
+    s.created_at AS session_created_at,
+    f.*
+FROM conversations c
+LEFT JOIN sessions s
+    ON c.session_id = s.session_id
+LEFT JOIN feedback_metadata f
+    ON c.session_id = f.session_id
+WHERE c.role = 'user';
