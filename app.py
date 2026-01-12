@@ -941,7 +941,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         except json.JSONDecodeError:
             logger.warning("⚠️ Failed to parse Hume models JSON")
 
-    # Call scorer
+    # Call E/D/N scorer
     my_scorer = scorer_eval.score_interaction(
         text=current_nurse_msg,
         hume_data=emotions
@@ -949,9 +949,9 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     scorer = my_scorer.get("raw_score")
     # Update session escalation / behaviour otherwise falls to previous
     if scorer is not None:
-        print(f"🎭scorer:{scorer}")
+        print(f"🎭E/D/N scorer:{scorer}")
         scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
-        print(f"🎭scorer:{scorer}")
+        print(f"🎭E/D/N scorer:{scorer}")
         session_escalation_level[session_id]= session_escalation_level[session_id] + scorer
         session_escalation_int[session_id] = escalation_hysteresis(session_escalation_int[session_id], session_escalation_level[session_id]) 
     
@@ -974,7 +974,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     rule = engine.evaluate(
         current=tracker.current().order,
         turns=tracker.turn_counter,
-        escalation=session_escalation_int[session_id],
+        escalation=session_escalation_level[session_id],
     )
 
     if rule:
@@ -1187,7 +1187,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             reply or reply_text,
             milestone=current_milestone,
             behaviour=current_behaviour,
-            escalation=level,
+            escalation=session_escalation_level[session_id],
             models_json=json.dumps({
                 "full_output": raw_full_output,
                 "reply": reply,
