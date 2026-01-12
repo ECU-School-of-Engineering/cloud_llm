@@ -1,6 +1,6 @@
 defaults:
     recipe_id: barry_hospital
-    escalation_level: 3
+    escalation_level: 0
     turns_per_milestone: 5
 
 roles:
@@ -87,7 +87,7 @@ milestone_rules:
   - id: hospital_path
     rules:
       - current: any
-        min_escalation: 4
+        min_escalation: 4.0
         min_turns: 2
         next: 4
 
@@ -100,7 +100,7 @@ milestone_rules:
         next: 3
 
       - current: 3
-        min_escalation: 1
+        min_escalation: 1.0
         min_turns: 4
         next: 4
 
@@ -148,7 +148,7 @@ recipes:
     role: barry
     milestones: hospital_path
     behaviour_levels: Barry
-    starting_escalation: 2
+    starting_escalation: 0
 
   - id: maddie_classroom
     role: maddie
@@ -161,5 +161,5 @@ service_config:
   flush_delay: 0.25     # max seconds between flushes
   stream_log_level: info
   uncensored: 1
-  escalation_penalty: 1    # scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
-  descalation_penalty: 1
+  escalation_penalty: 2    # scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
+  descalation_penalty: 2
