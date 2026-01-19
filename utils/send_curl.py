@@ -86,7 +86,7 @@ def new_session():
             "curl",
             "-s",
             "-X", "POST",
-            f"{NEW_SESSION_URL}?recipe_id=barry_hospital"
+            f"{NEW_SESSION_URL}?recipe_id=maddie_classroom"
         ],
         capture_output=True,
         text=True,
