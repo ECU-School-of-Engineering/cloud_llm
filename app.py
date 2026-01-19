@@ -36,11 +36,12 @@ def strip_emotion_tags(text: str) -> str:
 #----------------------------------------------#
 
 class Role:
-    def __init__(self, id: str, name: str, base_context: str, character_behavior: str):
+    def __init__(self, id: str, name: str, base_context: str, character_behavior: str,  interlocutor: str):
         self.id = id
         self.name = name
         self.base_context = base_context
         self.character_behavior = character_behavior
+        self.interlocutor = interlocutor
 
 
 class BehaviourLevel:
@@ -149,7 +150,8 @@ class ConfigLoader:
             id=role_data["id"],
             name=role_data["name"],
             base_context=role_data["base_context"],
-            character_behavior=role_data["character_behavior"]
+            character_behavior=role_data["character_behavior"],
+            interlocutor=role_data.get("interlocutor", "speaker"),
         )
 
         # Resolve behaviour set
@@ -481,14 +483,20 @@ def create_session(session_id: str= None, recipe_id: str = None) -> dict:
 # Prompt Manager: builds structured JSON prompts for the model
 # =========================================================
 class PromptManager:
-    def __init__(self, base_context: str, character_behavior: str):
+    def __init__(self, base_context: str, character_behavior: str, character_name: str, interlocutor: str,):
         self.base_context = base_context.strip()
         self.character_behavior = character_behavior.strip()
+        self.character_name = character_name
+        self.interlocutor=interlocutor
+        logger.debug(
+        f"🧠 PromptManager init → character={character_name}, interlocutor={interlocutor}"
+)
+
 
     def build_messages(
         self,
         history: List[Dict],
-        current_nurse: str,
+        current_speaker: str,
         milestone: "Milestone" = None,
         behaviour: "BehaviourLevel" = None,
     ) -> List[Dict]:
@@ -497,33 +505,31 @@ class PromptManager:
         """
 
         # ---- SYSTEM PROMPT ----
-        system_prompt = """
-        You are a roleplaying AI actor portraying “Barry”.
+        system_prompt = f"""
+        You are a roleplaying AI actor
 
         You must output ONLY valid JSON with this structure:
-        {
-        "reply": "Barry’s in-character spoken response",
+        {{
+        "reply": "In-character spoken response",
         "emotion": "current emotion",
-        "action": "short description of what Barry does",
-        "escalation": "yes or no — does the nurse’s last message help calm Barry?",
+        "action": "short description of what you do",
+        "escalation": "yes or no — does the last message helps you calmin down?",
         "summary": "a brief summary of the conversation so far"
-        }
+        }}
 
         RULES YOU MUST FOLLOW:
-        1. Always respond directly and immediately to the field "current_nurse".
-        - This field represents the nurse’s most recent spoken sentence.
-        - Barry's reply MUST be a natural in-character reaction to it.
+        1. Always respond directly and immediately to the field "current_speaker".
+        - This field represents the interlocutor most recent spoken sentence.
+        - Your reply MUST be a natural in-character reaction to it.
 
         2. Incorporate the character’s "current_behavior" to shape tone, intensity, and emotional expression.
 
-        3. Follow the narrative direction given in "story_arc.current_milestone".
-        - Your reply must align with the theme, intention, and dramatic purpose of this milestone.
-        - Treat it as the active scene Barry is currently in.
+        3. CRITICAL: Follow the narrative direction given in "story_arc.current_milestone".
         - Stay within this story arc unless instructed otherwise.
 
         4. The "interaction_history" field provides the last conversation turns.
         - Use it only for background awareness.
-        - DO NOT respond to older history. ONLY "current_nurse".
+        - CRITICAL: DO NOT respond to older history. ONLY "current_speaker".
 
         5. Do NOT break character.
         6. Do NOT add explanations outside JSON.
@@ -541,12 +547,12 @@ class PromptManager:
                 "current_milestone": str(milestone) if milestone else None,
             },
             "interaction_history": history[-6:] if history else [],
-            "current_nurse": current_nurse, 
+            "current_speaker": current_speaker, 
         }
 
         # ---- USER PROMPT ----
         user_prompt = json.dumps(structured_context, indent=2)
-        user_prompt += "\n\nNow, as Barry, produce the next line of dialogue remember to use your current_behavior and your current_milestone in the story_arc in JSON format as specified.\nassistant:"
+        user_prompt += "\n\nNow, as your character, produce the next line of dialogue remember to use your current_behavior and your current_milestone in the story_arc in JSON format as specified.\nassistant:"
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -925,9 +931,11 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     prompt_manager = PromptManager(
         base_context=recipe.role.base_context,
         character_behavior=recipe.role.character_behavior,
+        character_name=recipe.role.name,
+        interlocutor=recipe.role.interlocutor,
     )
 
-    current_nurse_msg = session_last_user_input.get(session_id, "")
+    current_speaker_msg = session_last_user_input.get(session_id, "")
     # 🔮 Behaviour scoring 
     level = session_escalation_level.get(session_id, float(recipe.starting_escalation))   #current level fall_back
         
@@ -943,7 +951,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 
     # Call E/D/N scorer
     my_scorer = scorer_eval.score_interaction(
-        text=current_nurse_msg,
+        text=current_speaker_msg,
         hume_data=emotions
     )
     scorer = my_scorer.get("raw_score")
@@ -987,7 +995,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     
     messages = prompt_manager.build_messages(
         history,
-        current_nurse=current_nurse_msg,      
+        current_speaker=current_speaker_msg,      
         milestone=tracker.current(),
         behaviour=behaviour_level
     )
@@ -1103,7 +1111,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             "model": str(backend),
             "choices": [{"delta": {},"finish_reason": "stop","index": 0}],
             }
-            print(f"CHUNK: {json.dumps(final_chunk)}")
+            logger.debug(f"CHUNK: {json.dumps(final_chunk)}")
             yield f"data: {json.dumps(final_chunk)}\n\n"
             yield "data: [DONE]\n\n"
             continue
@@ -1121,7 +1129,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             "model": str(backend),
             "choices": [{"delta": {"content": item},"index": 0}]            
         }
-        print(f"CHUNK: {json.dumps(chunk)}")
+        logger.debug(f"CHUNK: {json.dumps(chunk)}")
         yield f"data: {json.dumps(chunk)}\n\n"
         await asyncio.sleep(0)
 
