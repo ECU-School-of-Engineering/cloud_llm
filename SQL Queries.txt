@@ -41,7 +41,11 @@ recipe_id
 created_at
 recipe_json
 
-
+4. clm_hume_sync
+session_id
+HUME_chat_id
+HUME_timestamp
+HUME_top_5_emotions
 
 /////
 Sessions > 15:
@@ -103,4 +107,23 @@ LEFT JOIN sessions s
     ON c.session_id = s.session_id
 LEFT JOIN feedback_metadata f
     ON c.session_id = f.session_id
+WHERE c.role = 'user';
+
+
+
+CJ - Nurse text classifier + HUME
+SELECT
+    c.*,
+    s.created_at AS session_created_at,
+    f.*,
+    h.HUME_chat_id,
+    h.HUME_timestamp,
+    h.HUME_top_5_emotions
+FROM conversations c
+LEFT JOIN sessions s
+    ON c.session_id = s.session_id
+LEFT JOIN feedback_metadata f
+    ON c.session_id = f.session_id
+LEFT JOIN clm_hume_sync h
+    ON c.session_id = h.session_id
 WHERE c.role = 'user';
