@@ -2,7 +2,7 @@
 # start with: uvicorn app:app --host 0.0.0.0 --port 8080 --log-level debug
 
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Body
 from fastapi.responses import StreamingResponse
 import asyncio
 import json
@@ -19,6 +19,12 @@ import re
 from fastapi.middleware.cors import CORSMiddleware
 from escalation_scorer import EscalationScorer
 import math
+from pydantic import BaseModel
+
+class EscalationRequest(BaseModel):
+    session_id: str | None = None
+    level: float
+
 # Configure logging 
 logging.basicConfig(
     level=logging.DEBUG,  # default log level
@@ -441,6 +447,37 @@ class ConversationManager:
         if session_id not in self.trackers:
             self.trackers[session_id] = MilestoneTracker(recipe.milestones)
         return self.trackers[session_id]
+
+
+## SET ESCALATION LEVEL
+def set_escalation_level(session_id: str, level_float: float) -> dict:
+    recipe = session_recipes[session_id]
+
+    # Set float
+    session_escalation_level[session_id] = level_float
+
+    # Set int 
+    session_escalation_int[session_id] = escalation_hysteresis(
+        session_escalation_int.get(session_id, recipe.starting_escalation),
+        level_float,
+    )
+
+    behaviour = recipe.behaviours.get_level(session_escalation_int[session_id])
+
+    logger.info(
+        f"🔥 Escalation updated | session={session_id} "
+        f"float={session_escalation_level[session_id]:.2f} "
+        f"int={session_escalation_int[session_id]} "
+        f"behaviour='{behaviour.description}'"
+    )
+
+    return {
+        "session_id": session_id,
+        "escalation_level": session_escalation_level[session_id],
+        "escalation_int": session_escalation_int[session_id],
+        "behaviour": behaviour.description,
+    }
+
 
 ## CREATE SESSION ####
 def create_session(session_id: str= None, recipe_id: str = None) -> dict:
@@ -1310,38 +1347,24 @@ async def get_chat_history(session_id: str):
     }
 
 
-@app.get("/escalation/{escalation}")
-async def get_escalation(escalation: int, session_id: str = None):
-    """
-    Get (and optionally set) the current escalation level.
-    If session_id is missing or unknown, create a new session for it.
-    """
+@app.post("/set_escalation")
+async def set_escalation(level: float, session_id: str | None = None):
     recipe_id = loader.get_default_recipe_id()
-    recipe = loader.get_recipe(recipe_id)
 
-    level = float(escalation)
-    behaviour = recipe.behaviours.get_level(session_escalation_int[session_id])
-
-    # ✅ Case 1: No session_id provided → create a new one
     if not session_id:
-        session = create_session()  # returns dict with new session_id
+        session = create_session()
         session_id = session["session_id"]
-        logger.info(f"✨ Created new session {session_id} via /escalation endpoint")
 
-    # ✅ Case 2: session_id provided but not yet known → initialize it
     if session_id not in session_recipes:
         create_session(session_id=session_id, recipe_id=recipe_id)
-        logger.info(f"✨ Initialized missing session {session_id} via /escalation endpoint")
 
-    # ✅ Update escalation level for this session
-    session_escalation_level[session_id] = level
-    logger.info(f"🔥 Escalation for session {session_id} set to {level}")
+    return set_escalation_level(session_id, level)
 
-    return {
-        "session_id": session_id,
-        "level": behaviour.level,
-        "behaviour": behaviour.description,
-    }
+
+@app.get("/admin/set_escalation/{level}")
+async def set_escalation_debug(level: float, session_id: str):
+    return set_escalation_level(session_id, level)
+
 
 @app.get("/chat/sessions")
 async def list_sessions():
