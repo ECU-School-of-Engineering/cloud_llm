@@ -1366,6 +1366,39 @@ async def set_escalation_debug(level: float, session_id: str):
     return set_escalation_level(session_id, level)
 
 
+@app.get("/escalation/{escalation}")
+async def get_escalation(escalation: int, session_id: str = None):
+    """
+    Get (and optionally set) the current escalation level.
+    If session_id is missing or unknown, create a new session for it.
+    """
+    recipe_id = loader.get_default_recipe_id()
+    recipe = loader.get_recipe(recipe_id)
+
+    level = float(escalation)
+    behaviour = recipe.behaviours.get_level(session_escalation_int[session_id])
+
+    # ✅ Case 1: No session_id provided → create a new one
+    if not session_id:
+        session = create_session()  # returns dict with new session_id
+        session_id = session["session_id"]
+        logger.info(f"✨ Created new session {session_id} via /escalation endpoint")
+
+    # ✅ Case 2: session_id provided but not yet known → initialize it
+    if session_id not in session_recipes:
+        create_session(session_id=session_id, recipe_id=recipe_id)
+        logger.info(f"✨ Initialized missing session {session_id} via /escalation endpoint")
+
+    # ✅ Update escalation level for this session
+    session_escalation_level[session_id] = level
+    logger.info(f"🔥 Escalation for session {session_id} set to {level}")
+
+    return {
+        "session_id": session_id,
+        "level": behaviour.level,
+        "behaviour": behaviour.description,
+    }
+
 @app.get("/chat/sessions")
 async def list_sessions():
     conn = sqlite3.connect(conv_manager.db_path)
