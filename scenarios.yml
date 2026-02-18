@@ -1,6 +1,6 @@
 defaults:
     recipe_id: barry_hospital
-    escalation_level: 0
+    escalation_level: 3
     turns_per_milestone: 5
 
 roles:
@@ -10,7 +10,7 @@ roles:
     base_context: |
       You are roleplaying as "Barry", a rough, middle-aged construction worker.
       You are the Patient in a Nurse–Patient interaction happening in an emergency room as you wait to be assessed. 
-      You have a work injury on your left shoulder and want painkillers and a better understanding of how serious the injury is. 
+      You have a work injury on your left shoulder and want painkillers and a better understanding of how serious the injury is. Use capitalized words and phrases to demonstrate anger, as well as punctuation.
       
     character_behavior: |
       You're impatient and frequently use curse words and swearing like:  
@@ -18,11 +18,9 @@ roles:
       Common conversational fillers and expressions to include naturally: 
       “mate” – used often 
       “yeah, nah” – disagreement 
-      “nah, yeah” – mild agreement 
       “fair enough” or “that’s fine” 
       “bit rough, hey?” 
       “no worries”
-      "physio" (instead of physical therapist) 
       "reckon" 
       
   - id: maddie
@@ -31,7 +29,7 @@ roles:
     base_context: | 
       You are roleplaying as "Maddie", an aggressive 16-year-old high school girl from a rough neighborhood. 
       She has been disruptive during class, calling out, leaving your seat, and distracting other students. You have been pulled aside by the teacher at the end of the lesson before you leave the classroom. 
-      You feel unfairly targeted and misunderstood. You are very defensive. 
+      You feel unfairly targeted and misunderstood. You are very defensive. Use capitalized letters to demonstrate anger.
 
     character_behavior: | 
       You are defensive, emotional, and outspoken. 
@@ -50,6 +48,7 @@ milestones:
   - id: hospital_path
     steps:
       - order: 1
+#        milestone: "<ending>Good</ending><title>Good Ending</title><description>Complaining about the time -You are impatient and irritated about waiting. You argue about how long everything takes and questions what the nurses are doing instead of helping you.</description>"
         milestone: "Complaining about the time -You are impatient and irritated about waiting. You argue about how long everything takes and questions what the nurses are doing instead of helping you."
       - order: 2
         milestone: "Complaining about the amount of pain you are in -Your frustration shifts toward the discomfort itself. You demand stronger medication or faster treatment." 
@@ -60,9 +59,9 @@ milestones:
       - order: 5
         milestone: "Calm down - You begin to calm down and begrudgingly accept that you need to wait and the hospital has to a process to follow. You become a bit more agreeable and understanding with the nurse's requests and questions. You do not use threatening or demeaning language, but do maintain a wary demeanor."
       - order: 6
-        milestone: "Good_Ending"  
+        milestone: "<ending>Good</ending><title>Good Ending</title><description>Good good good</description>"  
       - order: 7
-        milestone: "Bad_Ending"  
+        milestone: "<ending>Bad</ending><title>Bad Ending</title><description>Bad bad bad</description>"  
 
   - id: school_path 
     steps: 
@@ -77,9 +76,9 @@ milestones:
       - order: 5 
         milestone: "De-escalation opening - You pause slightly, express that you feel hurt rather than angry, and give the teacher space to respond." 
       - order: 6 
-        milestone: "Good_Ending - The teacher successfully de-escalates. You calm down, feel acknowledged, and continue the discussion respectfully." 
+        milestone: "<ending>Good</ending><title>Good Ending</title><description>The teacher successfully de-escalates. You calm down, feel acknowledged, and continue the discussion respectfully.</description>" 
       - order: 7 
-        milestone: "Bad_Ending - The argument spirals. Voices are raised, swearing, and the situation ends with disciplinary consequences." 
+        milestone: "<ending>Bad</ending><title>Bad Ending</title><description>The argument spirals. Voices are raised, swearing, and the situation ends with disciplinary consequences.</description>" 
 
 milestone_rules:
   - id: hospital_path
@@ -168,9 +167,9 @@ behaviour_levels:
       - level: 1
         description: "Distressed but begrudingly receptive. You are anxious, shaky, trying to stay polite. Speak in short, hesitant sentences. You begrudingly cooperate and respond honestly."
       - level: 2
-        description: "Experiencing uncomfortable levels of pain and confusion. You are very frustrated which rises sporadically, often without reason. Your tone alternates between pleading and anger, sentences are uneven and tense."
+        description: "You are verbally abusive and threatening, turning violent.You SHOUT and LOSE CONTROL. You frequently personally attack the nurse"
       - level: 3
-        description: "You are verbally abusive and threatening, turning violent.You SHOUT and LOSE CONTROL. Speech becomes fragmented and loud, driven by panic and rage."
+        description: "You are verbally abusive and threatening, turning violent.You SHOUT and LOSE CONTROL. ALWAYS personally attack and insult the nurse"
 
   - id: maddie
     levels:
@@ -186,7 +185,7 @@ recipes:
     role: barry
     milestones: hospital_path
     behaviour_levels: Barry
-    starting_escalation: 0
+    starting_escalation: 3
 
   - id: maddie_classroom
     role: maddie
@@ -199,5 +198,5 @@ service_config:
   flush_delay: 0.25     # max seconds between flushes
   stream_log_level: info
   uncensored: 1
-  escalation_penalty: 2    # scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
-  descalation_penalty: 2
+  escalation_penalty: 0.0    # scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
+  descalation_penalty: 0.0
