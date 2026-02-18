@@ -1236,14 +1236,7 @@ async def get_escalation(escalation: int, session_id: str = None):
         logger.info(f"✨ Initialized missing session {session_id} via /escalation endpoint")
 
     # ✅ Update escalation level for this session
-    set_escalation_level(session_id, level)
-    logger.info(f"🔥 Escalation for session {session_id} set to {level}")
-
-    return {
-        "session_id": session_id,
-        "level": behaviour.level,
-        "behaviour": behaviour.description,
-    }
+    return set_escalation_level(session_id, level)
 
 @app.get("/chat/sessions")
 async def list_sessions():
