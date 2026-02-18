@@ -1236,7 +1236,7 @@ async def get_escalation(escalation: int, session_id: str = None):
         logger.info(f"✨ Initialized missing session {session_id} via /escalation endpoint")
 
     # ✅ Update escalation level for this session
-    session_escalation_level[session_id] = level
+    set_escalation_level(session_id, level)
     logger.info(f"🔥 Escalation for session {session_id} set to {level}")
 
     return {
