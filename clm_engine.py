@@ -20,6 +20,8 @@ import httpx
 import requests
 from pydantic import BaseModel
 from escalation_scorer import EscalationScorer
+import subprocess
+import os
 # =========================================================
 # Remote LLM Service Wrapper
 # =========================================================
@@ -1317,6 +1319,25 @@ async def admin_reload_config():
         logger.exception("❌ Failed to reload config")
         return {"status": "error", "detail": str(e)}
 
+@app.post("/admin/loadscenarios_cloud")
+async def admin_loadscenarios_cloud():
+    """
+    Reload YAML configuration at runtime.
+    Updates:
+      - roles
+      - behaviour levels
+      - milestones
+      - service_config (flush, log level, tokens)
+    """
+    try:
+        load_scenarios=subprocess.run(["rclone", "copy", "sharepoint:data", "/home/fhh/Downloads/datasync"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        logger.info("Download")
+        logger.info(load_scenarios.stdout)
+        result = reload_config()
+        return result
+    except Exception as e:
+        logger.exception("❌ Failed to reload config")
+        return {"status": "error", "detail": str(e)}
 
 @app.get("/test_llm")
 def test_llm():
