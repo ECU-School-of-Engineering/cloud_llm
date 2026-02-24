@@ -85,7 +85,7 @@ class Recipe:
 
 class ConfigLoader:
     def __init__(self, yaml_path: str):
-        with open(yaml_path, "r") as f:
+        with open(yaml_path, "r",encoding="utf-8") as f:
             self.config = yaml.safe_load(f)
 
         # Grab defaults section if it exists
@@ -492,7 +492,7 @@ class LLMBackend(ABC):
 
 
 # Backend 1: llama.cpp
-from llama_cpp import Llama
+# from llama_cpp import Llama
 
 
 class LlamaBackend(LLMBackend):
@@ -723,7 +723,11 @@ session_active_generation = {}  # key: session_id → (phrase_id, partial_id)
 uncensored=SERVICE_CFG["uncensored"]
 escalation_penalty=SERVICE_CFG["escalation_penalty"]
 descalation_penalty=SERVICE_CFG["descalation_penalty"]
-scorer_eval = EscalationScorer()
+scorer_eval = EscalationScorer(config_path=r'config_esc.yml')
+scorer_config_source = scorer_eval.get_config_source()
+print("THIS IS CHANGED IN THE HOST AND THEN MOUNTED!!!")
+print(scorer_config_source)
+
 
 # =========================================================
 # ConversationManager Manager
@@ -808,6 +812,54 @@ def censor(text: str) -> str:
         else:
             return "BEEP"
     return pattern.sub(repl, text)
+
+def get_escalation_score(session_id: str, current_nurse_msg: str, models_raw: str = None) -> float:
+    """
+    Calculate escalation score if config enables it and data is available.
+    Returns None if scoring should be skipped.
+    """
+    emotions = {}
+    
+    # Parse HUME emotions if available
+    if models_raw:
+        try:
+            models = json.loads(models_raw)
+            emotions = (models or {}).get("prosody", {}) or {}
+            if isinstance(emotions, dict):
+                emotions = emotions.get("scores", {})
+            else:
+                emotions = {}
+        except json.JSONDecodeError:
+            logger.warning("⚠️ Failed to parse Hume models JSON")
+    
+    # Check scorer config and data
+    try:
+        with open("config_esc.yml", "r", encoding="utf-8") as f:
+            scorer_config = yaml.safe_load(f)
+        
+        bert_enabled = scorer_config.get("bert", {}).get("enabled", False)
+        hume_enabled = scorer_config.get("hume", {}).get("enabled", False)
+        has_emotion_data = bool(emotions and any(emotions.values()))
+        has_text_data = bool(current_nurse_msg and current_nurse_msg.strip())
+        
+        logger.info(f"🔍 Scorer check: BERT={bert_enabled}, HUME={hume_enabled}, emotion_data={has_emotion_data}, text_data={has_text_data}")
+        
+        if (bert_enabled or hume_enabled) and (has_text_data or has_emotion_data):
+            result = scorer_eval.score_interaction(text=current_nurse_msg, hume_data=emotions)
+            score = result.get("raw_score")
+            logger.info(f"✅ Scoring succeeded: {score}")
+            return score
+        else:
+            logger.info(f"⏭️ Skipping scorer: requirements not met")
+            return None
+            
+    except FileNotFoundError:
+        logger.warning("⚠️ config_esc.yml not found - skipping scoring")
+        return None
+    except Exception as e:
+        logger.warning(f"⚠️ Scorer failed: {e} - skipping scoring")
+        return None
+
 # Censored
 
 # =========================================================
@@ -851,21 +903,30 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     level = session_escalation_level.get(session_id, float(recipe.starting_escalation))   #current level fall_back
         
     models_raw = session_last_user_models.get(session_id)
-    emotions = {}
+    # emotions = {}
 
-    if models_raw:
-        try:
-            models = json.loads(models_raw)
-            emotions = models.get("prosody", {}).get("scores", {})
-        except json.JSONDecodeError:
-            logger.warning("⚠️ Failed to parse Hume models JSON")
+    # if models_raw:
+    #     try:
+    #         models = json.loads(models_raw)
+    #         # Safe chaining with default values
+    #         emotions = (models or {}).get("prosody", {}) or {}
+    #         if isinstance(emotions, dict):
+    #             emotions = emotions.get("scores", {})
+    #         else:
+    #             emotions = {}
+    #     except json.JSONDecodeError:
+    #         logger.warning("⚠️ Failed to parse Hume models JSON")
+    #         emotions = {}
 
-    # Call scorer
-    my_scorer = scorer_eval.score_interaction(
-        text=current_nurse_msg,
-        hume_data=emotions
-    )
-    scorer = my_scorer.get("raw_score")
+    # # Call scorer
+    # my_scorer = scorer_eval.score_interaction(
+    #     text=current_nurse_msg,
+    #     hume_data=emotions)
+    # scorer = my_scorer.get("raw_score")
+
+    scorer = get_escalation_score(session_id, current_nurse_msg, models_raw)
+
+
     # Update session escalation / behaviour otherwise falls to previous
     if scorer is not None:
         print(f"🎭scorer:{scorer}")
