@@ -49,7 +49,7 @@ networkx==3.4.2
 mpmath>=1.3,<1.4
 
 # --- Your internal package ---
-git+https://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:x-oauth-basic@github.com/ECU-School-of-Engineering/escalation_scoring.git
+git+https://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:x-oauth-basic@github.com/ECU-School-of-Engineering/escalation_scoring.git
 
 # git+https://github.com/ECU-School-of-Engineering/escalation_scoring
 #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

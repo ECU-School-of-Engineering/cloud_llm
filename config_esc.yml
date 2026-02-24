@@ -1,0 +1,271 @@
+# Fuzzy System Configuration
+# This file defines a Type-1 Mamdani fuzzy inference system for escalation detection
+# Mirrors MATLAB .fis format but adapted for scikit-fuzzy (Python)
+package_info:
+  name: 'escalation_scorer'
+  version: '1.0.0'
+  source: 'local'
+system:
+  name: 'fis-test_type1_weighted'
+  type: 'mamdani'  # Options: 'mamdani' (most common) sugeno is not supported here
+  version: '1.0'
+
+
+# EMA (Exponential Moving Average) Configuration
+# Optional: Set enabled to true to track running EMA and cumulative trajectory
+ema:
+  enabled: true  # Set to true to enable EMA tracking
+  alpha: 0.3      # Smoothing factor (0 < alpha <= 1)
+                  # Higher alpha = more weight to recent values
+                  # Lower alpha = smoother, more historical influence
+  initial_value: 0.0  # Initial EMA value 
+
+# BERT Model Configuration
+bert:
+  enabled: true
+  model_name: 'bert-base-uncased'  # Base BERT model
+  model_path: 'D:\\IVADE\\escalation_scoring\\escalation_scorer\\models\\best_model_state_trial_4.bin'  # Path to trained weights
+  max_length: 128  # Maximum sequence length
+  device: 'cuda'  # 'cuda', 'cpu', or null for auto-detect
+  # Class mapping (do not change order)
+  classes:
+    - 'escalation'
+    - 'de-escalation'
+    - 'neutral'
+
+hume:
+  enabled: true
+  # API configuration (if using HUME API)
+  api_key: null  # Load from environment variable HUME_API_KEY
+  api_endpoint: 'https://api.hume.ai/v0/batch/jobs'  # Adjust as needed
+  
+  # Emotion categorization mapping
+  # You can customize these categories as needed
+  emotion_mapping:
+    de-escalation:
+      - 'Admiration'
+      - 'Amusement'
+      - 'Awe'
+      - 'Adoration'
+      - 'Aesthetic Appreciation'
+      - 'Contentment'
+      - 'Calmness'
+      - 'Concentration'
+      - 'Ecstasy'
+      - 'Love'
+      - 'Entrancement'
+      - 'Sympathy'
+      - 'Excitement'
+      - 'Joy'
+      - 'Nostalgia'
+      - 'Pride'
+      - 'Relief'
+      - 'Romance'
+      - 'Satisfaction'
+      - 'Surprise (positive)'
+      - 'Triumph'
+    
+    escalation:
+      - 'Anger'
+      - 'Anxiety'
+      - 'Awkwardness'
+      - 'Boredom'
+      - 'Desire'
+      - 'Empathic Pain'
+      - 'Contempt'
+      - 'Disappointment'
+      - 'Embarrassment'
+      - 'Disgust'
+      - 'Distress'
+      - 'Doubt'
+      - 'Guilt'
+      - 'Envy'
+      - 'Fear'
+      - 'Horror'
+      - 'Pain'
+      - 'Sadness'
+      - 'Shame'
+      - 'Surprise (negative)'
+      - 'Tiredness'
+    
+    neutral:
+      - 'Contemplation'
+      - 'Craving'
+      - 'Confusion'
+      - 'Determination'
+      - 'Interest'
+      - 'Realization'
+
+
+# Fuzzy Inference Methods
+# These define how fuzzy operations are performed
+methods:
+  # AND operator for rule antecedents (IF A AND B)
+  # Options: 'min' (minimum), 'prod' (product)
+  and_method: 'min'
+  
+  # OR operator for rule antecedents (IF A OR B)
+  # Options: 'max' (maximum), 'probor' (probabilistic OR)
+  or_method: 'max'
+  
+  # Implication method (how rules affect output)
+  # Options: 'min' (Mamdani), 'prod' (product)
+  imp_method: 'min'
+  
+  # Aggregation method (how to combine multiple rule outputs)
+  # Options: 'max' (maximum), 'sum' (sum), 'probor' (probabilistic OR)
+  agg_method: 'max'
+  
+  # Defuzzification method (convert fuzzy output to crisp number)
+  # Options: 'centroid' (center of area), 'bisector', 'mom' (mean of maximum), 
+  #          'som' (smallest of maximum), 'lom' (largest of maximum)
+  defuzz_method: 'centroid'
+
+# Input Variables
+inputs:
+  # Input 1: BERT Confidence Score
+  - name: 'BERT_Confidence'
+    range: [-1, 1]  # [min, max] - escalation scores range from -1 (de-esc) to +1 (esc)
+    
+    # Membership Functions (MFs)
+    # Each MF defines a fuzzy set on this input's universe
+    membership_functions:
+      # MF format: {name: {type: 'mf_type', params: [...]}}
+      # Common types in scikit-fuzzy:
+      #   - 'trimf': Triangular [a, b, c] where b is peak
+      #   - 'trapmf': Trapezoidal [a, b, c, d] where b-c is plateau
+      #   - 'gaussmf': Gaussian [mean, sigma]
+      #   - 'gbellmf': Generalized bell [a, b, c]
+      #   - 'sigmf': Sigmoidal [a, c]
+      
+      - name: 'Deescalation'
+        type: 'trapmf'
+        params: [-1, -1, -0.8, -0.2]  # [left_foot, left_shoulder, right_shoulder, right_foot]
+        # Note: Type-2 uncertainty bounds from original .fis ignored (Type-1 conversion)
+      
+      - name: 'Neutral'
+        type: 'trapmf'
+        params: [-0.397416020671835, -0.0974160206718346, 0.143410852713178, 0.402583979328165]
+      
+      - name: 'Escalation'
+        type: 'trapmf'
+        params: [0.2, 0.8, 1, 1]
+  
+  # Input 2: HUME Confidence Score
+  - name: 'HUME_confidence'
+    range: [-1, 1]
+    
+    membership_functions:
+      - name: 'Deescalation'
+        type: 'trapmf'
+        params: [-1, -1, -0.8, -0.2]
+      
+      - name: 'Neutral'
+        type: 'trapmf'
+        params: [-0.4, -0.1, 0.1, 0.4]
+      
+      - name: 'Escalation'
+        type: 'trapmf'
+        params: [0.2, 0.8, 1, 1]
+
+# Output Variable
+outputs:
+  - name: 'escalation_level'
+    range: [-1, 1]
+    
+    membership_functions:
+      - name: 'Strong_Deescalation'
+        type: 'trapmf'
+        params: [-1, -1, -0.8, -0.7]
+      
+      - name: 'Weak_Deescalation'
+        type: 'trapmf'
+        params: [-0.8, -0.4, -0.2, 0.1]
+      
+      - name: 'Neutral'
+        type: 'trimf'
+        params: [-0.2, 0, 0.2]  # [left, peak, right]
+      
+      - name: 'Weak_Escalation'
+        type: 'trapmf'
+        params: [-0.1, 0.2, 0.4, 0.8]
+      
+      - name: 'Strong_Escalation'
+        type: 'trapmf'
+        params: [0.7, 0.8, 1, 1]
+
+# Fuzzy Rules
+# Format: IF (input1 is MF) AND/OR (input2 is MF) THEN (output is MF)
+# Weights allow you to scale rule importance (0.0 to 1.0)
+rules:
+  # Rule format:
+  # - antecedent: [[input1_mf_index, input2_mf_index, ...], connector]
+  #   consequent: [output_mf_index]
+  #   weight: 0.0-1.0
+  #   operator: 1 (AND) or 2 (OR)
+  #
+  # MF indices (1-based, matching MATLAB convention):
+  # BERT: 1=Deescalation, 2=Neutral, 3=Escalation
+  # HUME: 1=Deescalation, 2=Neutral, 3=Escalation
+  # Output: 1=Strong_Deesc, 2=Weak_Deesc, 3=Neutral, 4=Weak_Esc, 5=Strong_Esc
+  
+  - antecedent: [[3, 3], 'and']  # BERT=Escalation AND HUME=Escalation
+    consequent: [5]               # → Strong_Escalation
+    weight: 1.0
+    operator: 1  # 1=AND, 2=OR
+  
+  - antecedent: [[3, 1], 'and']  # BERT=Escalation AND HUME=Deescalation
+    consequent: [2]               # → Weak_Deescalation
+    weight: 0.6
+    operator: 1
+  
+  - antecedent: [[3, 2], 'and']  # BERT=Escalation AND HUME=Neutral
+    consequent: [4]               # → Weak_Escalation
+    weight: 0.7
+    operator: 1
+  
+  - antecedent: [[1, 3], 'and']  # BERT=Deescalation AND HUME=Escalation
+    consequent: [4]               # → Weak_Escalation
+    weight: 1.0
+    operator: 1
+  
+  - antecedent: [[1, 1], 'and']  # BERT=Deescalation AND HUME=Deescalation
+    consequent: [1]               # → Strong_Deescalation
+    weight: 1.0
+    operator: 1
+  
+  - antecedent: [[1, 2], 'and']  # BERT=Deescalation AND HUME=Neutral
+    consequent: [2]               # → Weak_Deescalation
+    weight: 0.7
+    operator: 1
+  
+  - antecedent: [[2, 3], 'and']  # BERT=Neutral AND HUME=Escalation
+    consequent: [4]               # → Weak_Escalation
+    weight: 1.0
+    operator: 1
+  
+  - antecedent: [[2, 1], 'and']  # BERT=Neutral AND HUME=Deescalation
+    consequent: [2]               # → Weak_Deescalation
+    weight: 1.0
+    operator: 1
+  
+  - antecedent: [[2, 2], 'and']  # BERT=Neutral AND HUME=Neutral
+    consequent: [3]               # → Neutral
+    weight: 1.0
+    operator: 1
+  
+  - antecedent: [[1, 3], 'and']  # BERT=Deescalation AND HUME=Escalation (duplicate with different weight)
+    consequent: [2]               # → Weak_Deescalation
+    weight: 0.4
+    operator: 1
+  
+  - antecedent: [[3, 1], 'and']  # BERT=Escalation AND HUME=Deescalation (duplicate with different weight)
+    consequent: [4]               # → Weak_Escalation
+    weight: 0.4
+    operator: 1
+
+# Notes:
+# - Type-2 fuzzy uncertainty bounds from original MATLAB .fis have been removed (Type-1 conversion)
+# - All membership functions are now Type-1 (crisp boundaries)
+# - Weights in rules allow partial rule firing (0.0 = rule disabled, 1.0 = full strength)
+# - Duplicate rules (rules 10-11) create weighted combinations - scikit-fuzzy will aggregate them
