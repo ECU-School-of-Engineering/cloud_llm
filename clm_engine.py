@@ -841,7 +841,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     # Update session escalation / behaviour otherwise falls to previous
     if scorer is not None:
         print(f"🎭E/D/N scorer:{scorer}")
-        scorer = scorer*escalation_penalty if scorer >= 0 else scorer*descalation_penalty  # No linearidad
+        scorer = min(scorer*escalation_penalty,0.4) if scorer >= 0 else max(scorer*descalation_penalty,-0.3)  # No linearidad
         print(f"🎭E/D/N scorer:{scorer}")
         session_escalation_level[session_id]= session_escalation_level[session_id] + scorer
         session_escalation_int[session_id] = escalation_hysteresis(session_escalation_int[session_id], session_escalation_level[session_id]) 
