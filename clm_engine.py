@@ -601,8 +601,7 @@ class PromptManager:
 
         2. Incorporate the character’s "current_behavior" to shape tone, intensity, and emotional expression.
 
-        3. CRITICAL: Follow the narrative direction given in "story_arc.current_milestone".
-        - Stay within this story arc unless instructed otherwise.
+        3. CRITICAL: Use the narrative direction given in "story_arc" to formulate your answer.
 
         4. The "interaction_history" field provides the last conversation turns.
         - Use it only for background awareness.
@@ -620,9 +619,7 @@ class PromptManager:
                 "behavior_baseline": self.character_behavior,
                 "current_behavior": behaviour.description if behaviour else None,
             },
-            "story_arc": {
-                "current_milestone": str(milestone) if milestone else None,
-            },
+            "story_arc": str(milestone).upper() if milestone else None,
             "interaction_history": history[-6:] if history else [],
             "current_speaker": current_speaker, 
         }
