@@ -78,6 +78,17 @@ def strip_emotion_tags(text: str) -> str:
     return re.sub(r"\{[^}]*\}", "", text).strip()
 
 
+# =========================================================
+# LLM Scorer + helper + Placeholder
+# =========================================================
+# session_llm_scorers = {}
+# def get_llm_scorer(session_id: str):
+    # if session_id not in session_llm_scorers:
+    #     session_llm_scorers[session_id] = llm_scorer()
+    # return session_llm_scorers[session_id]
+
+
+
 ## Content classes ###
 #----------------------------------------------#
 
@@ -831,6 +842,11 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
             emotions = models.get("prosody", {}).get("scores", {})
         except json.JSONDecodeError:
             logger.warning("⚠️ Failed to parse Hume models JSON")
+    
+    #Placeholder for LLM Scorer
+    # scorer = get_llm_scorer(session_id)
+    # my_scorer = scorer.score_update(
+    #     text=current_speaker_msg    )
 
     # Call E/D/N scorer
     my_scorer = scorer_eval.score_interaction(
