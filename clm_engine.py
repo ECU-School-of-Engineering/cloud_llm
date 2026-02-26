@@ -693,7 +693,7 @@ session_active_generation = {}  # key: session_id → (phrase_id, partial_id)
 uncensored=SERVICE_CFG["uncensored"]
 escalation_penalty=SERVICE_CFG["escalation_penalty"]
 descalation_penalty=SERVICE_CFG["descalation_penalty"]
-scorer_eval = EscalationScorer()
+scorer_eval = EscalationScorer('./config/fuzzy_system.yaml')
 
 # =========================================================
 # ConversationManager Manager
@@ -1316,6 +1316,7 @@ async def admin_reload_config():
         logger.exception("❌ Failed to reload config")
         return {"status": "error", "detail": str(e)}
 
+# ## ==============      Temporal   ======================= Remove in Production
 @app.post("/admin/loadscenarios_cloud")
 async def admin_loadscenarios_cloud():
     """
@@ -1335,6 +1336,8 @@ async def admin_loadscenarios_cloud():
     except Exception as e:
         logger.exception("❌ Failed to reload config")
         return {"status": "error", "detail": str(e)}
+
+# ## ==============      Temporal   =======================
 
 @app.get("/test_llm")
 def test_llm():
