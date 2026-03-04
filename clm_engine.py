@@ -20,11 +20,21 @@ import httpx
 import requests
 from pydantic import BaseModel
 from escalation_scorer import EscalationScorer
+from llm_escalation_evaluator import configure,evaluate, _get_grader
+from dotenv import load_dotenv
+
 import subprocess
 import os
 # =========================================================
 # Remote LLM Service Wrapper
 # =========================================================
+
+load_dotenv()
+TEST_CONFIG = "grader_config.yaml"
+
+configure("barry",  config_path=TEST_CONFIG)
+configure("maddie", config_path=TEST_CONFIG)
+
 
 class RemoteLLMService:
     def __init__(self, base_url: str):
@@ -848,21 +858,29 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     # my_scorer = scorer.score_update(
     #     text=current_speaker_msg    )
 
-    # Call E/D/N scorer
+    # Call E/D/N LLM scorer
     my_scorer = scorer_eval.score_interaction(
         text=current_speaker_msg,
         hume_data=emotions
     )
     scorer = my_scorer.get("raw_score")
+    # result = evaluate('barry', history, current_speaker_msg)
+    # logger.info(f"⚠️⚠️⚠️⚠️⚠️⚠️ LLM_escalation: {result} ⚠️⚠️⚠️⚠️⚠️⚠️  - History: {history}  - Current Speaker: {current_speaker_msg}")
     # Update session escalation / behaviour otherwise falls to previous
     if scorer is not None:
-        print(f"🎭E/D/N scorer:{scorer}")
+        print(f"🎭E/D/N scorer before:{scorer}")
         scorer = min(scorer*escalation_penalty,0.4) if scorer >= 0 else max(scorer*descalation_penalty,-0.3)  # No linearidad
-        print(f"🎭E/D/N scorer:{scorer}")
-        session_escalation_level[session_id]= session_escalation_level[session_id] + scorer
-        session_escalation_int[session_id] = escalation_hysteresis(session_escalation_int[session_id], session_escalation_level[session_id]) 
+        print(f"🎭E/D/N scorer updated:{scorer}")
+        
+        current_level = session_escalation_level[session_id]
+        preview_level = current_level + scorer
+        preview_int = escalation_hysteresis(
+            session_escalation_int[session_id],
+            preview_level
+        )
+        preview_behaviour = recipe.behaviours.get_level(preview_int)
     
-    behaviour_level = recipe.behaviours.get_level(session_escalation_int[session_id])
+    behaviour_level = preview_behaviour
 
     logger.info(
         f"🎭 Behaviour updated via scorer → level={session_escalation_level[session_id]:.2f} - Int: level={session_escalation_int[session_id]}: {behaviour_level.description}"
@@ -988,7 +1006,7 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     threading.Thread(target=producer, daemon=True).start()
     # ---- Send header chunk ----
     session_hume_talking[session_id] = False
-    logger.debug(f"🟡 Setting {session_id} to {session_hume_talking[session_id]}")
+    logger.debug(f"🟡 Hume_talking Setting {session_id} to {session_hume_talking[session_id]}")
     head = {
         "id": base_id,
         "object": "chat.completion.chunk",
@@ -1061,7 +1079,8 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     # Save only if ASR did NOT override this generation
     latest = session_latest_partial.get((session_id, active_phrase_id), active_partial_id)
     if latest == active_partial_id:
-
+        session_escalation_level[session_id] = preview_level
+        session_escalation_int[session_id] = preview_int
         logger.info("💾 No new Hume activity during generation → saving USER + ASSISTANT messages.")
 
         # -----------------------------------------------
