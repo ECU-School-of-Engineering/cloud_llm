@@ -545,6 +545,7 @@ def create_session(session_id: str= None, recipe_id: str = None) -> dict:
     global last_session_id
     if session_id is None:
         session_id = str(uuid.uuid4())
+
     # Use loader defaults if recipe_id not provided
     recipe = loader.get_recipe(recipe_id)
     behaviour_level = recipe.behaviours.get_level(recipe.starting_escalation)
@@ -567,6 +568,31 @@ def create_session(session_id: str= None, recipe_id: str = None) -> dict:
     logger.info("⚙️ Behaviours: " + ", ".join(f"{l.level}:{l.description}" for l in recipe.behaviours.levels))
     current_level = recipe.starting_escalation
     current_behaviour = recipe.behaviours.get_level(session_escalation_int[session_id]).description
+    # warm up
+    prompt_manager = PromptManager(
+            base_context=recipe.role.base_context,
+            character_behavior=recipe.role.character_behavior,
+            character_name=recipe.role.name,
+            interlocutor=recipe.role.interlocutor,
+        )
+
+    # minimal input
+    current_speaker = "Hello"
+
+    behaviour = recipe.behaviours.get_level(recipe.starting_escalation)
+
+    messages = prompt_manager.build_messages(
+            history=[],
+            current_speaker=current_speaker,
+            milestone=tracker.current(),
+            behaviour=behaviour,
+        )
+
+        # generate just 1 token
+    for _ in backend.stream(messages, max_tokens=1):
+        break
+    
+    
     return {
         "status": "ok",
         "session_id": session_id,
@@ -864,13 +890,12 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
         hume_data=emotions
     )
     scorer = my_scorer.get("raw_score")
-    # result = evaluate('barry', history, current_speaker_msg)
-    # logger.info(f"⚠️⚠️⚠️⚠️⚠️⚠️ LLM_escalation: {result} ⚠️⚠️⚠️⚠️⚠️⚠️  - History: {history}  - Current Speaker: {current_speaker_msg}")
+    
     # Update session escalation / behaviour otherwise falls to previous
     if scorer is not None:
-        print(f"🎭E/D/N scorer before:{scorer}")
+        logger.debug(f"🎭E/D/N scorer:{scorer}")
         scorer = min(scorer*escalation_penalty,0.4) if scorer >= 0 else max(scorer*descalation_penalty,-0.3)  # No linearidad
-        print(f"🎭E/D/N scorer updated:{scorer}")
+        logger.debug(f"🎭E/D/N scorer *penalty:{scorer}")
         
         current_level = session_escalation_level[session_id]
         preview_level = current_level + scorer
@@ -1079,8 +1104,21 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
     # Save only if ASR did NOT override this generation
     latest = session_latest_partial.get((session_id, active_phrase_id), active_partial_id)
     if latest == active_partial_id:
-        session_escalation_level[session_id] = preview_level
-        session_escalation_int[session_id] = preview_int
+        # LLM E/D scorer only when last hume coms
+        llm_escalation = evaluate('barry', history, current_speaker_msg)
+        logger.info(f"⚠️⚠️⚠️⚠️⚠️⚠️ LLM_escalation: {llm_escalation} ⚠️⚠️⚠️⚠️⚠️⚠️  - History: {history}  - Current Speaker: {current_speaker_msg}")
+        current_level = session_escalation_level[session_id]
+        if llm_escalation=='deescalatory':
+            current_level+=-0.3
+        elif llm_escalation=='escalatory':
+            current_level+=0.4
+        current_level_int = escalation_hysteresis(
+            session_escalation_int[session_id],
+            current_level
+        )
+        session_escalation_level[session_id] = current_level
+        session_escalation_int[session_id] = current_level_int
+        logger.info(f"⚠️⚠️⚠️⚠️⚠️⚠️ LLM_escalation level: {current_level} ⚠️⚠️⚠️⚠️⚠️⚠️  - level int: {current_level_int} ")
         logger.info("💾 No new Hume activity during generation → saving USER + ASSISTANT messages.")
 
         # -----------------------------------------------
