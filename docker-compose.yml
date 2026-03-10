@@ -63,7 +63,7 @@ services:
 
   ngrok:
     image: ngrok/ngrok:latest
-    command: http --url=swatheable-warier-kacey.ngrok-free.dev clm:8080
+    command: http clm:8080
     ports:
       - "4040:4040"
     environment:
@@ -78,18 +78,26 @@ services:
       context: .
       dockerfile: Dockerfile.tunnel
     volumes:
-      - "./keys/ivade 1.pem:/root/.ssh/ivade.pem:ro"
-    command: >
-      autossh -M 0
-        -i /root/.ssh/ivade.pem
-        -p 9004
-        -o StrictHostKeyChecking=no
-        -o ServerAliveInterval=30
-        -o ServerAliveCountMax=3
-        -o ExitOnForwardFailure=yes
-        -N
-        -R 9000:clm:8080
-        ec2-user@3.24.142.221
+      - "./keys/ivade 1.pem:/root/.ssh/ivade.pem.src:ro"
+    command:
+      - "-M"
+      - "0"
+      - "-i"
+      - "/root/.ssh/ivade.pem"
+      - "-p"
+      - "9004"
+      - "-o"
+      - "StrictHostKeyChecking=no"
+      - "-o"
+      - "ServerAliveInterval=30"
+      - "-o"
+      - "ServerAliveCountMax=3"
+      - "-o"
+      - "ExitOnForwardFailure=yes"
+      - "-N"
+      - "-R"
+      - "9000:clm:8080"
+      - "ec2-user@3.24.142.221"
     depends_on:
       clm:
         condition: service_healthy

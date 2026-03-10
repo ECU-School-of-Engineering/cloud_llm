@@ -16,8 +16,8 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 WORKDIR /app
 
 # Entrypoint installs private package at container start using GITHUB_TOKEN from .env
-COPY entrypoint.sh /entrypoint.sh
-RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
+# Written inline to guarantee LF line endings on both Windows and Linux hosts
+RUN printf '#!/bin/bash\nset -e\nif [ -n "${GITHUB_TOKEN}" ]; then\n    echo "Installing private packages..."\n    pip install --quiet git+https://x-access-token:${GITHUB_TOKEN}@github.com/ECU-School-of-Engineering/escalation_scoring.git\n    pip install --quiet git+https://x-access-token:${GITHUB_TOKEN}@github.com/ECU-School-of-Engineering/llm_escalation_evaluator.git\nfi\nexec "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

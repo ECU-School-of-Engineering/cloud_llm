@@ -175,6 +175,68 @@ curl -X POST "https://swatheable-warier-kacey.ngrok-free.dev/set_escalation?sess
 * `autossh` maintains persistent reverse tunnels.
 * EC2 must allow TCP forwarding and gateway ports for remote access.
 
+---
+
+# V3.0 – Fully Dockerized Deployment (2026-03-10)
+
+All services now run as Docker containers. No host-level dependencies (ngrok, autossh, systemd) required. Identical workflow on Windows (Docker Desktop + WSL2) and Linux (Ubuntu + NVIDIA Container Toolkit).
+
+## Architecture
+
+```
+[Hume clients]  →  ngrok container  →  clm:8080
+[API clients]   →  EC2:80/443 (nginx)  →  EC2:9000  →  tunnel container (autossh)  →  clm:8080  →  llm:8001
+```
+
+## Services
+
+| Container | Purpose | Port |
+|-----------|---------|------|
+| `llm` | LLM inference (Stheno 8B, 8-bit) | 8001 |
+| `clm` | CLM engine + session management | 8080 |
+| `ngrok` | Expose clm to Hume clients | 4040 (dashboard) |
+| `tunnel` | Reverse SSH tunnel to EC2 | — |
+
+## Start everything
+
+```bash
+docker compose up -d
+```
+
+## Daily workflow
+
+```bash
+# Logs
+docker compose logs -f clm
+docker compose logs -f llm
+
+# Status
+docker compose ps
+
+# Restart one service
+docker compose restart clm
+
+# Deploy from laptop (sync + restart)
+./deploy.sh          # restart clm
+./deploy.sh llm      # restart llm
+./deploy.sh all      # restart both
+```
+
+## Private packages
+
+`escalation_scorer` and `llm_escalation_evaluator` are installed from GitHub at every container startup using `GITHUB_TOKEN` from `.env`. Always pulls latest HEAD — no rebuild needed to update them.
+
+## Config files required in project root
+
+| File | Used by |
+|------|---------|
+| `grader_config.yaml` | `llm_escalation_evaluator` |
+| `config/fuzzy_system.yaml` | `escalation_scorer` |
+| `keys/ivade 1.pem` | autossh tunnel to EC2 |
+| `.env` | all secrets (HF_TOKEN, GITHUB_TOKEN, NGROK_AUTHTOKEN, HUME_API_KEY, OPENAI_API_KEY) |
+
+---
+
 ## V1.0 – Legacy
 
 ### Start tmux session

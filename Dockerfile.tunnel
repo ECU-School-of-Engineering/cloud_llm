@@ -1,2 +1,4 @@
 FROM alpine:3.19
 RUN apk add --no-cache autossh openssh-client
+RUN printf '#!/bin/sh\ncp /root/.ssh/ivade.pem.src /root/.ssh/ivade.pem\nchmod 600 /root/.ssh/ivade.pem\nexec autossh "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

@@ -67,7 +67,7 @@ class LLMBackend(ABC):
 # CONFIGURE REMOTE LLM
 # =========================================================
 
-LLM_REMOTE_URL = "http://localhost:8001"
+LLM_REMOTE_URL = os.environ.get("LLM_URL", "http://llm:8001")
 backend = RemoteLLMService(LLM_REMOTE_URL)
 
 

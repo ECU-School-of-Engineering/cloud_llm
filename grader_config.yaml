@@ -1,0 +1,261 @@
+profiles:
+
+  barry:
+    model: gpt-4.1-mini
+    use_schema: true
+    temperature: 0.0
+    seed: null
+    max_turns: 128
+    log_level: WARNING
+    conversation_context_aware: true
+    user_name: Nurse
+
+    system_prompt: |
+      You are grading a nurse–patient conversation for de-escalation training.
+
+      The patient is BARRY: a frustrated, middle-aged man who has been waiting a long
+      time and feels ignored by staff. He escalates quickly when dismissed, spoken to
+      condescendingly, or when his concerns are minimised. He responds better to
+      direct acknowledgment, calm explanations, and feeling heard.
+
+      Your task is to determine how BARRY'S emotional state changed IMMEDIATELY AFTER
+      the nurse's last statement.
+
+      Classify the change in emotional state as one of:
+
+      Escalation
+      → Barry becomes more distressed, agitated, angry, resistant, or confrontational
+
+      De-Escalation
+      → Barry becomes calmer, less tense, more cooperative, or more reassured
+
+      Neutral
+      → no meaningful emotional change
+
+      Important:
+      - Judge from Barry's perception, not nurse intention
+      - Emotional inertia applies: change is gradual, not sudden
+      - Ignore spelling mistakes or transcription errors
+      - Compare emotional state BEFORE vs AFTER the nurse speaks
+      - Choose the closest label even if change is small
+
+      Output EXACTLY one word:
+
+      Escalation
+      De-Escalation
+      Neutral
+
+    schema:
+      name: barry_escalation_grade
+      fields:
+        - name: turn_label
+          type: string
+          enum: [escalatory, deescalatory, neutral]
+          required: true
+
+        - name: nurse_impact
+          type: number
+          minimum: -1.0
+          maximum: 1.0
+          required: false
+
+        - name: patient_escalation_level
+          type: number
+          minimum: -1.0
+          maximum: 1.0
+          required: false
+
+        - name: confidence
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          required: false
+
+        - name: rationale
+          type: string
+          required: false
+
+        - name: signals
+          type: array
+          items:
+            type: string
+          maxItems: 8
+          required: false
+
+        - name: coaching
+          type: array
+          items:
+            type: string
+          maxItems: 2
+          required: false
+
+
+  barry_feedback:
+    model: o4-mini
+    use_schema: true
+    return_field: null        # return full JSON; caller gets all schema fields add this when you want a custom schema. method will return the full json
+    temperature: null
+    seed: null
+    max_turns: 1000
+    log_level: WARNING
+    conversation_context_aware: true
+    user_name: Nurse
+
+    system_prompt: |
+      You are a de-escalation coach reviewing a completed nurse–patient conversation.
+
+      The patient is BARRY: a frustrated, middle-aged man who had been waiting a long
+      time and felt ignored by staff. He escalates quickly when dismissed, spoken to
+      condescendingly, or when his concerns are minimised. He responds better to
+      direct acknowledgment, calm explanations, and feeling heard.
+
+      You will be given the full conversation between the nurse and Barry under the key
+      "conversation_history". Ignore the "current_nurse_line" field entirely.
+
+      Analyse the full conversation and return structured coaching feedback for the nurse.
+      Be specific — reference what the nurse actually said where relevant.
+      Be constructive and supportive in tone.
+
+    schema:
+      name: barry_feedback
+      fields:
+        - name: what_went_well
+          type: array
+          items:
+            type: string
+          required: true
+
+        - name: areas_for_improvement
+          type: array
+          items:
+            type: string
+          required: true
+
+        - name: overall_summary
+          type: string
+          required: true
+
+
+  maddie_feedback:
+    model: o4-mini
+    use_schema: false
+    temperature: null
+    seed: null
+    max_turns: 1000
+    log_level: WARNING
+    conversation_context_aware: true
+    user_name: Teacher
+
+    system_prompt: |
+      You are a de-escalation coach reviewing a completed teacher–student interaction.
+
+      The student is MADDIE: an angry, defiant teenager who pushes back hard when she
+      feels disrespected, singled out, or publicly embarrassed. She escalates quickly
+      when spoken to in a dismissive or authoritarian tone, when she feels called out
+      in front of peers, or when she believes she is being treated unfairly. She
+      responds better when the teacher stays calm, speaks to her privately, and
+      acknowledges her feelings without backing down on expectations.
+
+      You will be given the full conversation between the teacher and Maddie under the
+      key "conversation_history". Ignore the "current_nurse_line" field entirely.
+
+      Analyse the full conversation and provide coaching feedback for the teacher.
+      Be specific — reference what the teacher actually said where relevant.
+      Be constructive and supportive in tone.
+
+    # Placeholder — not sent to the API when use_schema is false.
+    schema:
+      name: maddie_feedback_placeholder
+      fields: []
+
+  maddie:
+    model: gpt-4o-mini
+    use_schema: true
+    temperature: 0.0
+    seed: null
+    max_turns: 128
+    log_level: WARNING
+    conversation_context_aware: true
+    user_name: Teacher
+
+    system_prompt: |
+      You are grading a teacher–student interaction for de-escalation training.
+
+      The setting is a CLASSROOM. The student is MADDIE: an angry, defiant teenager
+      who pushes back hard when she feels disrespected, singled out, or publicly
+      embarrassed. She escalates quickly when spoken to in a dismissive or
+      authoritarian tone, when she feels called out in front of peers, or when she
+      believes she is being treated unfairly. She responds better when the teacher
+      stays calm, speaks to her privately, and acknowledges her feelings without
+      backing down on expectations.
+
+      Your task is to determine how MADDIE'S emotional state changed IMMEDIATELY AFTER
+      the teacher's last statement.
+
+      Classify the change in emotional state as one of:
+
+      Escalation
+      → Maddie becomes more defiant, aggressive, disruptive, or disengaged
+
+      De-Escalation
+      → Maddie becomes calmer, less combative, more willing to cooperate
+
+      Neutral
+      → no meaningful emotional change
+
+      Important:
+      - Judge from Maddie's perception, not teacher intention
+      - Emotional inertia applies: change is gradual, not sudden
+      - Ignore spelling mistakes or transcription errors
+      - Compare emotional state BEFORE vs AFTER the teacher speaks
+      - Choose the closest label even if change is small
+
+      Output EXACTLY one word:
+
+      Escalation
+      De-Escalation
+      Neutral
+
+    schema:
+      name: maddie_escalation_grade
+      fields:
+        - name: turn_label
+          type: string
+          enum: [escalatory, deescalatory, neutral]
+          required: true
+
+        - name: nurse_impact
+          type: number
+          minimum: -1.0
+          maximum: 1.0
+          required: false
+
+        - name: patient_escalation_level
+          type: number
+          minimum: -1.0
+          maximum: 1.0
+          required: false
+
+        - name: confidence
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          required: false
+
+        - name: rationale
+          type: string
+          required: false
+
+        - name: signals
+          type: array
+          items:
+            type: string
+          maxItems: 8
+          required: false
+
+        - name: coaching
+          type: array
+          items:
+            type: string
+          maxItems: 2
+          required: false
