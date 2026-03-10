@@ -1177,6 +1177,12 @@ async def sse_stream(session_id: str, request: Request, backend: LLMBackend) -> 
 # =========================================================
 # Endpoints
 # =========================================================
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "clm"}
+
+
 @app.post("/chat/completions", response_class=StreamingResponse)
 async def chat_completions(request: Request, custom_session_id: str = None):
     raw = await request.body()

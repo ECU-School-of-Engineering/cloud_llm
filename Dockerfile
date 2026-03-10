@@ -9,14 +9,15 @@ RUN apt-get update && apt-get install -y \
 # Python alias
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
-# Python deps
+# Python deps (public packages only)
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Set working directory
 WORKDIR /app
 
-# Expose API port
-EXPOSE 80
+# Entrypoint installs private package at container start using GITHUB_TOKEN from .env
+COPY entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "80", "--reload"]
+EXPOSE 8080
+ENTRYPOINT ["/entrypoint.sh"]

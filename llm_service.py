@@ -52,6 +52,11 @@ logger.info("✅ Model loaded successfully.")
 # 🔹 GENERATION ENDPOINT
 # =========================================================
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "llm", "model": MODEL_NAME}
+
+
 @app.post("/generate")
 async def generate(request: Request):
 

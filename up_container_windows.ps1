@@ -1,9 +1,9 @@
 Write-Host "`n============================================================" -ForegroundColor Yellow
-Write-Host "         Starting Barry Cloud LLM containers..." -ForegroundColor Yellow
+Write-Host "         Starting IVADE containers..." -ForegroundColor Yellow
 Write-Host "============================================================`n" -ForegroundColor Yellow
 
-# Start containers
-docker-compose up -d
+# Start all containers
+docker compose up -d
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Failed to start containers" -ForegroundColor Red
     exit 1
@@ -11,43 +11,58 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Waiting for containers to be ready..." -ForegroundColor Yellow
 
-# Wait for host_clm
-Write-Host "  Checking host_clm container..." -ForegroundColor Yellow
-while ((docker inspect -f '{{.State.Running}}' cloud_llm-host_clm-1 2>$null) -ne "true") {
-    Write-Host "  - host_clm is starting..." -ForegroundColor Yellow
+# Wait for llm container to be running
+Write-Host "  Checking llm container..." -ForegroundColor Yellow
+while ((docker inspect -f '{{.State.Running}}' cloud_llm-llm-1 2>$null) -ne "true") {
+    Write-Host "  - llm is starting..." -ForegroundColor Yellow
     Start-Sleep -Seconds 2
 }
-Write-Host "  + host_clm is running" -ForegroundColor Green
+Write-Host "  + llm is running" -ForegroundColor Green
 
-# Wait for ngrok
-Write-Host "  Checking ngrok container..." -ForegroundColor Yellow
-while ((docker inspect -f '{{.State.Running}}' cloud_llm-ngrok-1 2>$null) -ne "true") {
-    Write-Host "  - ngrok is starting..." -ForegroundColor Yellow
+# Wait for clm container to be running
+Write-Host "  Checking clm container..." -ForegroundColor Yellow
+while ((docker inspect -f '{{.State.Running}}' cloud_llm-clm-1 2>$null) -ne "true") {
+    Write-Host "  - clm is starting..." -ForegroundColor Yellow
     Start-Sleep -Seconds 2
 }
-Write-Host "  + ngrok is running" -ForegroundColor Green
+Write-Host "  + clm is running" -ForegroundColor Green
 
-# Wait for FastAPI
-Write-Host "  Waiting for FastAPI to be ready..." -ForegroundColor Yellow
+# Wait for LLM service health (model load takes a while)
+Write-Host "  Waiting for LLM service to be ready (model loading...)..." -ForegroundColor Yellow
 $retryCount = 0
-while ($retryCount -lt 60) {
+while ($retryCount -lt 120) {
     try {
-        $null = Invoke-WebRequest -Uri "http://localhost:8080/chat/sessions" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-        Write-Host "  + FastAPI is ready" -ForegroundColor Green
+        $null = Invoke-WebRequest -Uri "http://localhost:8001/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        Write-Host "  + LLM service is ready" -ForegroundColor Green
         break
     } catch {
         $retryCount++
-        Write-Host "  - FastAPI is starting (attempt $retryCount/60)..." -ForegroundColor Yellow
+        Write-Host "  - LLM loading (attempt $retryCount/120)..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 5
+    }
+}
+
+# Wait for CLM FastAPI
+Write-Host "  Waiting for CLM service to be ready..." -ForegroundColor Yellow
+$retryCount = 0
+while ($retryCount -lt 60) {
+    try {
+        $null = Invoke-WebRequest -Uri "http://localhost:8080/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        Write-Host "  + CLM service is ready" -ForegroundColor Green
+        break
+    } catch {
+        $retryCount++
+        Write-Host "  - CLM starting (attempt $retryCount/60)..." -ForegroundColor Yellow
         Start-Sleep -Seconds 2
     }
 }
 
 if ($retryCount -eq 60) {
-    Write-Host "FastAPI failed to start" -ForegroundColor Red
+    Write-Host "CLM service failed to start" -ForegroundColor Red
     exit 1
 }
 
-# Wait for ngrok
+# Wait for ngrok tunnel
 Write-Host "  Waiting for ngrok tunnel..." -ForegroundColor Yellow
 Start-Sleep -Seconds 3
 
@@ -63,16 +78,18 @@ while ($retryCount -lt 30) {
         }
     } catch {}
     $retryCount++
-    Write-Host "  - Waiting for ngrok tunnel (attempt $retryCount/30)..." -ForegroundColor Yellow
+    Write-Host "  - Waiting for ngrok (attempt $retryCount/30)..." -ForegroundColor Yellow
     Start-Sleep -Seconds 2
 }
 
 Write-Host "`n============================================================" -ForegroundColor Green
-Write-Host "              Barry LLM is Ready!" -ForegroundColor Green
+Write-Host "              IVADE is Ready!" -ForegroundColor Green
 Write-Host "============================================================`n" -ForegroundColor Green
 
-Write-Host "Local URL:" -ForegroundColor Yellow
-Write-Host "  http://localhost:8080`n"
+Write-Host "Local URLs:" -ForegroundColor Yellow
+Write-Host "  CLM:  http://localhost:8080"
+Write-Host "  LLM:  http://localhost:8001"
+Write-Host "  ngrok dashboard: http://localhost:4040`n"
 
 if ($ngrokUrl) {
     Write-Host "Public ngrok URL:" -ForegroundColor Yellow
@@ -84,7 +101,13 @@ if ($ngrokUrl) {
 }
 
 Write-Host "Test Commands:" -ForegroundColor Yellow
-Write-Host "  curl.exe $ngrokUrl/chat/new_session`n"
+Write-Host "  curl.exe http://localhost:8080/health"
+Write-Host "  curl.exe http://localhost:8001/health"
+Write-Host "  curl.exe $ngrokUrl/chat/sessions`n"
+
+Write-Host "Monitor logs:" -ForegroundColor Yellow
+Write-Host "  docker compose logs -f clm"
+Write-Host "  docker compose logs -f llm`n"
 
 Write-Host "To stop:" -ForegroundColor Yellow
-Write-Host "  docker-compose down`n"
+Write-Host "  docker compose down`n"
