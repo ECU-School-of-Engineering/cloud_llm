@@ -10,7 +10,7 @@ MSG=${1:-"deploy $(date '+%Y-%m-%d %H:%M')"}
 echo "==> Committing and pushing..."
 git add -A
 git commit -m "$MSG" 2>/dev/null || echo "(nothing to commit)"
-git push origin main
+git push origin dev_docker
 
 echo ""
 echo "==> Push done. GitHub Actions will now:"

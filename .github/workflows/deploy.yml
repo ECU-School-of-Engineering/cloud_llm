@@ -12,18 +12,18 @@ jobs:
     steps:
       - name: Pull latest code
         run: |
-          cd /opt/ivade
-          git pull origin main
+          cd C:\ivade
+          git pull origin dev_docker
 
       - name: Restart changed services
         run: |
-          cd /opt/ivade
-          # Restart clm always (fast, Python reload)
+          cd C:\ivade
           docker compose restart clm
           echo "CLM restarted"
 
       - name: Verify health
         run: |
-          sleep 5
-          curl -sf http://localhost:8080/health && echo "CLM OK" || echo "CLM not healthy yet"
-          curl -sf http://localhost:8001/health && echo "LLM OK" || echo "LLM not healthy yet (may still be loading)"
+          Start-Sleep -Seconds 5
+          try { Invoke-WebRequest -Uri http://localhost:8080/health -UseBasicParsing | Out-Null; Write-Host "CLM OK" } catch { Write-Host "CLM not healthy yet" }
+          try { Invoke-WebRequest -Uri http://localhost:8001/health -UseBasicParsing | Out-Null; Write-Host "LLM OK" } catch { Write-Host "LLM not healthy yet (may still be loading)" }
+        shell: powershell
