@@ -63,7 +63,7 @@ services:
 
   ngrok:
     image: ngrok/ngrok:latest
-    command: http clm:8080
+    command: http --url=swatheable-warier-kacey.ngrok-free.dev clm:8080
     ports:
       - "4040:4040"
     environment:
