@@ -37,7 +37,7 @@ Write-Host "OK  .env found" -ForegroundColor Green
 $required = @("grader_config.yaml", "config/fuzzy_system.yaml", "keys/ivade 1.pem")
 foreach ($f in $required) {
     if (-not (Test-Path $f)) {
-        Write-Host "WARN: Missing $f — some services may fail to start." -ForegroundColor Yellow
+        Write-Host "WARN: Missing $f - some services may fail to start." -ForegroundColor Yellow
     } else {
         Write-Host "OK  $f found" -ForegroundColor Green
     }
@@ -47,7 +47,7 @@ foreach ($f in $required) {
 if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
     Write-Host "OK  NVIDIA GPU detected" -ForegroundColor Green
 } else {
-    Write-Host "WARN: nvidia-smi not found — GPU may not be available to containers." -ForegroundColor Yellow
+    Write-Host "WARN: nvidia-smi not found - GPU may not be available to containers." -ForegroundColor Yellow
 }
 
 Write-Host ""
