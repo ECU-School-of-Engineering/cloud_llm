@@ -1,0 +1,29 @@
+name: Deploy to Barry
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted   # Barry's runner picks this up
+    timeout-minutes: 10
+
+    steps:
+      - name: Pull latest code
+        run: |
+          cd /opt/ivade
+          git pull origin main
+
+      - name: Restart changed services
+        run: |
+          cd /opt/ivade
+          # Restart clm always (fast, Python reload)
+          docker compose restart clm
+          echo "CLM restarted"
+
+      - name: Verify health
+        run: |
+          sleep 5
+          curl -sf http://localhost:8080/health && echo "CLM OK" || echo "CLM not healthy yet"
+          curl -sf http://localhost:8001/health && echo "LLM OK" || echo "LLM not healthy yet (may still be loading)"

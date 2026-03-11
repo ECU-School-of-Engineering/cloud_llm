@@ -1,31 +1,20 @@
 #!/bin/bash
-# Sync code from laptop to Barry and restart the specified service
-# Usage: ./deploy.sh [clm|llm|all]   default: clm
+# Deploy to Barry via GitHub Actions
+# Usage: ./deploy.sh [message]
 #
-# Set GPU_HOST in your environment to override, e.g.:
-#   export GPU_HOST=fhh@barry
+# Commits any uncommitted changes, pushes to main, and the
+# self-hosted runner on Barry picks up the job automatically.
 
-GPU_HOST=${GPU_HOST:-fhh@barry}
-DEPLOY_DIR=/opt/ivade
-TARGET=${1:-clm}
+MSG=${1:-"deploy $(date '+%Y-%m-%d %H:%M')"}
 
-echo "==> Syncing to $GPU_HOST:$DEPLOY_DIR ..."
-rsync -avz \
-    --exclude='.git' \
-    --exclude='models' \
-    --exclude='.env' \
-    --exclude='__pycache__' \
-    --exclude='*.pyc' \
-    --exclude='database/*.db' \
-    ./ $GPU_HOST:$DEPLOY_DIR/
+echo "==> Committing and pushing..."
+git add -A
+git commit -m "$MSG" 2>/dev/null || echo "(nothing to commit)"
+git push origin main
 
-if [ "$TARGET" = "all" ]; then
-    echo "==> Restarting llm and clm..."
-    ssh $GPU_HOST "cd $DEPLOY_DIR && docker compose restart llm && docker compose restart clm"
-else
-    echo "==> Restarting $TARGET ..."
-    ssh $GPU_HOST "cd $DEPLOY_DIR && docker compose restart $TARGET"
-fi
-
-echo "==> Tailing logs for $TARGET (Ctrl+C to stop)..."
-ssh $GPU_HOST "cd $DEPLOY_DIR && docker compose logs -f $TARGET"
+echo ""
+echo "==> Push done. GitHub Actions will now:"
+echo "    1. Run deploy.yml on Barry's self-hosted runner"
+echo "    2. git pull + docker compose restart clm"
+echo ""
+echo "Monitor at: https://github.com/$(git remote get-url origin | sed 's/.*github.com[:/]//' | sed 's/\.git$//')/actions"
