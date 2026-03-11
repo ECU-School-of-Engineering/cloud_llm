@@ -49,12 +49,12 @@ Write-Host "==> Configuring runner..." -ForegroundColor White
 
 # Install as a Windows service so it starts on boot
 Write-Host "==> Installing runner as Windows service..." -ForegroundColor White
-.\svc.ps1 install
-.\svc.ps1 start
+& "$RunnerDir\svc.ps1" install
+& "$RunnerDir\svc.ps1" start
 
 Write-Host ""
 Write-Host "OK  Runner installed and started." -ForegroundColor Green
-Write-Host "    Check status:  .\svc.ps1 status"
+Write-Host "    Check status:  & "C:\actions-runner\svc.ps1" status"
 Write-Host "    View logs:     Get-EventLog -LogName Application -Source 'actions.runner.*' -Newest 20"
 Write-Host ""
 Write-Host "Verify on GitHub: Settings -> Actions -> Runners"
